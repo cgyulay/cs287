@@ -3,16 +3,14 @@ require("hdf5")
 
 cmd = torch.CmdLine()
 
--- Cmd Args
+-- Cmd Args / Hyperparameters
 cmd:option('-datafile', '', 'data file')
 cmd:option('-classifier', 'nb', 'classifier to use')
+cmd:option('-alpha', 1.0, 'alpha parameter for Laplace smoothing')
+cmd:option('-lr', 0.01, 'learning rate')
+cmd:option('-l2_reg', 0.01, 'l2 regularization multiplier')
+cmd:option('-n_epochs', 3, 'number of training epochs')
 -- Flag, default, description
-
--- Hyperparameters
-alpha = 1 -- For Laplace smoothing
-lr = 0.01 -- For learning rate
-L2_reg = 0.01 -- For L2 regularization
-n_epochs = 1 -- For number of cycles through training corpus
 
 function nb_predict(set, word_occurrences, p_y)
   local pred = torch.IntTensor(set:size(1))
@@ -44,6 +42,7 @@ function naive_bayes()
   local double_output = train_y:double()
   local p_y = torch.histc(double_output, nclasses)
   p_y = p_y / torch.sum(p_y)
+  print(p_y)
 
   -- Record number occurrences of each word in each class
   print('Building p(word|class)...')
@@ -94,9 +93,9 @@ function sparsify(dense)
       end
     end
 
-    if i % 5000 == 0 then
-      print('Sparsified ' .. i .. ' examples.')
-    end
+    -- if i % 5000 == 0 then
+    --   print('Sparsified ' .. i .. ' examples.')
+    -- end
   end
 
   return sparse
@@ -132,12 +131,12 @@ function logistic_regression()
 
   -- Create sparse representation of training/validation data
   -- For now, select only first n examples
-  print('Converting training data to sparse format...')
-  n_examples = 75000 -- train_x:size(1)
-  sparse_train_x = sparsify(train_x:index(1, torch.range(1, n_examples):long()))
+  -- print('Converting training data to sparse format...')
+  -- local n_examples = 75000 -- train_x:size(1)
+  -- local sparse_train_x = sparsify(train_x:index(1, torch.range(1, n_examples):long()))
 
-  batch_size = 20
-  local n_train_batches = math.floor(sparse_train_x:size(1) / batch_size) - 1
+  local batch_size = 20
+  local n_train_batches = math.floor(train_x:size(1) / batch_size) - 1
   -- local n_valid_batches = math.floor(sparse_valid_x:size(1) / batch_size)
 
   print('Beginning training...')
@@ -148,64 +147,86 @@ function logistic_regression()
   -- TODO:
   -- Implement bias weights and gradient
   -- Implement training over n_epochs
-  -- Accuracy check each epoch on train and valid
-  -- Figure out how loss could go below 0 (hint: it shouldn't)
+  -- Accuracy check each epoch on train and valid + timing
   -- Figure out why using the entire training set makes nan cost (possibly a specific example breaks things?)
+  -- Figure out how loss could go below 0 (hint: it shouldn't)
   -- Randomize ordering of samples during training
   -- Implement hinge loss and separate out sgd code
   
-  -- Forward pass
-  for i = 0, n_train_batches do
+  -- Pass over full training dataset n_epochs times
+  for i = 1, n_epochs do
+    -- Minibatch forward pass and gradient calculation
+    print('Beginning epoch ' .. i .. ' training...')
+    for j = 0, n_train_batches do
 
-    -- Dim 2 is batch
-    local batch_start = i * batch_size + 1
-    local batch_end = (i + 1) * batch_size
-    local x = sparse_train_x:index(1, torch.range(batch_start, batch_end):long()):t()
-    -- print(x)
-    local y = train_y:index(1, torch.range(batch_start, batch_end):long()):resize(1, batch_size)
-    local y_onehot = onehot(y, nclasses)
+      -- Dim 2 is batch
+      -- Sample in order from prepopulated sparse dataset
+      -- local batch_start = j * batch_size + 1
+      -- local batch_end = (j + 1) * batch_size
+      -- local x = sparse_train_x:index(1, torch.range(batch_start, batch_end):long()):t()
+      -- local y = train_y:index(1, torch.range(batch_start, batch_end):long()):resize(1, batch_size)
+      -- local y_onehot = onehot(y, nclasses)
 
-    -- Currently the bias breaks things
-    local z = W:t() * x -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
+      -- Sample random batch and sparsify on the fly
+      local batch_start = torch.random(1, train_x:size(1) - batch_size)
+      local batch_end = batch_start + batch_size - 1
+      local x = sparsify(train_x:index(1, torch.range(batch_start, batch_end):long())):t()
+      local y = train_y:index(1, torch.range(batch_start, batch_end):long()):resize(1, batch_size)
+      local y_onehot = onehot(y, nclasses)
+
+      -- Currently the bias breaks things
+      local z = W:t() * x -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
+      local py_x = softmax(z)
+      
+      -- l2 regularization
+      local l2 = torch.cmul(W, W):sum() * l2_reg / 2.0
+
+      -- Loss fn
+      local loss = cross_entropy_loss(py_x + l2, y_onehot)
+
+      if j % 1000 == 0 then
+        print('Loss after ' .. j .. ' minibatches: ' .. loss:sum())
+      end
+
+      -- Calculate grads and update weights
+      -- py_x but subtract 1 from correct class
+      -- size nclasses x batch_size
+      local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
+      
+      local W_grad = x * dL_dz:t()
+      -- local b_grad = torch.zeros(b:size())
+
+      assert(W_grad:size(1) == W:size(1))
+      assert(W_grad:size(2) == W:size(2))
+      -- assert(b_grad:size() == b:size())
+
+      -- Update weights
+      W = W - (W_grad * lr)
+    end -- End minibatch sgd
+
+    print('Epoch ' .. i .. ' training complete!')
+    print('Evaluating accuracy on training subset and validation set...')
+
+    local subset_size = 50000
+    local subset_start = torch.random(1, train_x:size(1) - subset_size)
+    local subset_end = subset_start + subset_size - 1
+    local sparse_train_subset_x = sparsify(train_x:index(1, torch.range(subset_start, subset_end):long())):t()
+    local train_subset_y = train_y:index(1, torch.range(subset_start, subset_end):long())
+    local z = W:t() * sparse_train_subset_x
     local py_x = softmax(z)
-    
-    -- L2 regularization
-    local L2 = torch.cmul(W, W):sum() * L2_reg / 2.0
+    local max, pred = py_x:max(1)
+    local accuracy = pred:int():resize(pred:size(2)):eq(train_subset_y):double():mean()
+    print('Training subset accuracy: ' .. accuracy)
 
-    -- Loss fn
-    local loss = cross_entropy_loss(py_x + L2, y_onehot)
+    local sparse_valid_x = sparsify(valid_x:index(1, torch.range(1, valid_x:size(1)):long())):t()
+    z = W:t() * sparse_valid_x
+    py_x = softmax(z)
+    max, pred = py_x:max(1)
+    accuracy = pred:int():resize(pred:size(2)):eq(valid_y):double():mean()
+    print('Validation accuracy: ' .. accuracy)
+  end -- End epoch evaluation
 
-    if batch_end % 5000 == 0 then
-      print('Loss after ' .. batch_end .. ' examples: ' .. loss:sum())
-    end
-
-    -- Calculate grads and update weights
-    -- py_x but subtract 1 from correct class
-    -- size nclasses x batch_size
-    local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
-    
-    local W_grad = x * dL_dz:t()
-    -- local b_grad = torch.zeros(b:size())
-
-    assert(W_grad:size(1) == W:size(1))
-    assert(W_grad:size(2) == W:size(2))
-    -- assert(b_grad:size() == b:size())
-
-    -- Update weights
-    W = W - (W_grad * lr)
-  end
-
-  print('Training complete!')
-  print('Running logistic regression on validation set...')
-
-  local sparse_valid_x = sparsify(valid_x:index(1, torch.range(1, valid_x:size(1)):long())):t()
-  local z = W:t() * sparse_valid_x
-  local py_x = softmax(z)
-  local max, pred = py_x:max(1)
-
-  local accuracy = pred:int():resize(pred:size(2)):eq(valid_y):double():mean()
-
-  print('Validation accuracy: ' .. accuracy .. '.')
+  print('Logistic regression model training complete!')
 end
 
 function linear_svm()
@@ -215,6 +236,11 @@ end
 function main()
   -- Parse input params
   opt = cmd:parse(arg)
+  alpha = opt.alpha
+  lr = opt.lr
+  l2_reg = opt.l2_reg
+  n_epochs = opt.n_epochs
+
   local f = hdf5.open(opt.datafile, 'r')
   nclasses = f:read('nclasses'):all():long()[1]
   nfeatures = f:read('nfeatures'):all():long()[1]
