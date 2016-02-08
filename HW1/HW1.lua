@@ -110,11 +110,15 @@ end
 function softmax(x)
   s1 = x:size(1)
   s2 = x:size(2)
-  max = torch.max(x, 1)
-  e_x = torch.exp(torch.csub(x, torch.expand(max, s1, s2)))
-
+  max = torch.max(x, 1):expand(s1, s2)
+  e_x = torch.exp(torch.csub(x, max)) + max
   log_exp = torch.expand(torch.log(torch.sum(e_x, 1)), s1, s2)
-  return torch.exp(torch.csub(x, log_exp))
+  soft = torch.exp(torch.csub(x, log_exp))
+
+  -- Enforce normalization
+  soft = torch.cdiv(soft, torch.sum(soft, 1):expand(s1, s2))
+
+  return soft
 end
 
 function cross_entropy_loss(py_x, y_onehot)
