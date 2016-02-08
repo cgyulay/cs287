@@ -122,6 +122,10 @@ function softmax(x)
   return soft
 end
 
+function sigmoid(x)
+  return torch.ones(x:size()):cdiv(torch.exp(-x) + 1.0)
+end
+
 function cross_entropy_loss(py_x, y_onehot)
   -- Negative log probability of each correct class
   y = torch.cmul(py_x, y_onehot):sum(1)
@@ -160,12 +164,10 @@ function logistic_regression()
 
 
   -- TODO:
-  -- Implement bias weights and gradient
+  -- Fix bias weights and gradient
   -- Implement training over n_epochs
-  -- Accuracy check each epoch on train and valid + timing
-  -- Figure out why using the entire training set makes nan cost (possibly a specific example breaks things?)
+  -- Timing check each epoch on train and valid
   -- Figure out how loss could go below 0 (hint: it shouldn't)
-  -- Randomize ordering of samples during training
   -- Implement hinge loss and separate out sgd code
   
   -- Pass over full training dataset n_epochs times
@@ -189,7 +191,6 @@ function logistic_regression()
       local y = train_y:index(1, torch.range(batch_start, batch_end):long()):resize(1, batch_size)
       local y_onehot = onehot(y, nclasses)
 
-      -- Currently the bias breaks things
       local z = W:t() * x -- + b -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
       local log_soft = softmax(z)
       local py_x = torch.exp(log_soft)
@@ -283,6 +284,8 @@ function main()
     logistic_regression()
   elseif opt.classifier == 'svm' then
     linear_svm()
+  elseif opt.classifier == 'nn' then
+    multilayer_logistic_regression()
   end
 
   -- Test

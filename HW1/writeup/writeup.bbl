@@ -1,0 +1,16 @@
+\begin{thebibliography}{}
+
+\bibitem[Murphy, 2012]{murphy2012machine}
+Murphy, K.~P. (2012).
+\newblock {\em Machine learning: a probabilistic perspective}.
+\newblock MIT press.
+
+\bibitem[Wang and Manning, 2012]{wang2012baselines}
+Wang, S. and Manning, C.~D. (2012).
+\newblock Baselines and bigrams: Simple, good sentiment and topic
+  classification.
+\newblock In {\em Proceedings of the 50th Annual Meeting of the Association for
+  Computational Linguistics: Short Papers-Volume 2}, pages 90--94. Association
+  for Computational Linguistics.
+
+\end{thebibliography}
