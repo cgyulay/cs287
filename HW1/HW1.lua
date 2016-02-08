@@ -6,10 +6,11 @@ cmd = torch.CmdLine()
 -- Cmd Args / Hyperparameters
 cmd:option('-datafile', '', 'data file')
 cmd:option('-classifier', 'nb', 'classifier to use')
-cmd:option('-alpha', 1.0, 'alpha parameter for Laplace smoothing')
+cmd:option('-alpha', 1.0, 'Laplace smoothing coefficient')
 cmd:option('-lr', 0.01, 'learning rate')
-cmd:option('-l2_reg', 0.01, 'l2 regularization multiplier')
+cmd:option('-lambda', 0.01, 'l2 regularization coefficient')
 cmd:option('-n_epochs', 3, 'number of training epochs')
+cmd:option('-m', 20, 'minibatch size')
 -- Flag, default, description
 
 function nb_predict(set, word_occurrences, p_y)
@@ -110,12 +111,13 @@ function softmax(x)
   s1 = x:size(1)
   s2 = x:size(2)
   max = torch.max(x, 1):expand(s1, s2)
-  e_x = torch.exp(torch.csub(x, max)) + max
-  log_exp = torch.expand(torch.log(torch.sum(e_x, 1)), s1, s2)
-  soft = torch.exp(torch.csub(x, log_exp))
+  e_x = torch.exp(torch.csub(x, max)) -- + max
+  log_exp = torch.expand(torch.log(torch.sum(e_x, 1)), s1, s2) + max
+  -- soft = torch.exp(torch.csub(x, log_exp)) -- p(y|x)
+  soft = torch.csub(x, log_exp) -- LogSoftMax
 
   -- Enforce normalization
-  soft = torch.cdiv(soft, torch.sum(soft, 1):expand(s1, s2))
+  -- soft = torch.cdiv(soft, torch.sum(soft, 1):expand(s1, s2))
 
   return soft
 end
@@ -123,7 +125,7 @@ end
 function cross_entropy_loss(py_x, y_onehot)
   -- Negative log probability of each correct class
   y = torch.cmul(py_x, y_onehot):sum(1)
-  return -torch.log(y)
+  return -torch.log(y):sum()
 end
 
 function logistic_regression()
@@ -135,14 +137,27 @@ function logistic_regression()
   -- local n_examples = 75000 -- train_x:size(1)
   -- local sparse_train_x = sparsify(train_x:index(1, torch.range(1, n_examples):long()))
 
-  local batch_size = 20
   local n_train_batches = math.floor(train_x:size(1) / batch_size) - 1
-  -- local n_valid_batches = math.floor(sparse_valid_x:size(1) / batch_size)
 
   print('Beginning training...')
 
   local W = torch.DoubleTensor(nfeatures, nclasses)
   local b = torch.DoubleTensor(nclasses)
+  -- b = torch.expand(b:resize(nclasses,1), nclasses, batch_size) -- For minibatch
+
+  -- Calculates accuracy on (pred, label) pairs
+  function accuracy(x, y)
+    local z = W:t() * x
+    local py_x = softmax(z)
+    local max, pred = py_x:max(1)
+    return pred:int():resize(pred:size(2)):eq(y):double():mean()
+  end
+
+  -- Start with an initial benchmark for validation accuracy
+  local sparse_valid_x = sparsify(valid_x):t()
+  acc = accuracy(sparse_valid_x, valid_y)
+  print('Untrained validation accuracy: ' .. acc)
+
 
   -- TODO:
   -- Implement bias weights and gradient
@@ -175,17 +190,18 @@ function logistic_regression()
       local y_onehot = onehot(y, nclasses)
 
       -- Currently the bias breaks things
-      local z = W:t() * x -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
-      local py_x = softmax(z)
+      local z = W:t() * x -- + b -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
+      local log_soft = softmax(z)
+      local py_x = torch.exp(log_soft)
       
       -- l2 regularization
-      local l2 = torch.cmul(W, W):sum() * l2_reg / 2.0
+      local l2 = torch.cmul(W, W):sum() * lambda / 2.0
 
       -- Loss fn
       local loss = cross_entropy_loss(py_x + l2, y_onehot)
 
       if j % 1000 == 0 then
-        print('Loss after ' .. j .. ' minibatches: ' .. loss:sum())
+        print('Loss after ' .. j .. ' minibatches: ' .. loss)
       end
 
       -- Calculate grads and update weights
@@ -194,14 +210,17 @@ function logistic_regression()
       local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
       
       local W_grad = x * dL_dz:t()
-      -- local b_grad = torch.zeros(b:size())
+      -- local b_grad = torch.expand(torch.mean(dL_dz, 2), nclasses, batch_size)
 
       assert(W_grad:size(1) == W:size(1))
       assert(W_grad:size(2) == W:size(2))
-      -- assert(b_grad:size() == b:size())
+      -- assert(b_grad:size(1) == b:size(1))
+      -- assert(b_grad:size(2) == b:size(2))
 
       -- Update weights
-      W = W - (W_grad * lr)
+      local decay = (1 - (lr * lambda) / 10.0)
+      W = (W * decay) - (W_grad * lr)
+      -- b = (b * decay) - (b_grad * lr)
     end -- End minibatch sgd
 
     print('Epoch ' .. i .. ' training complete!')
@@ -212,19 +231,20 @@ function logistic_regression()
     local subset_end = subset_start + subset_size - 1
     local sparse_train_subset_x = sparsify(train_x:index(1, torch.range(subset_start, subset_end):long())):t()
     local train_subset_y = train_y:index(1, torch.range(subset_start, subset_end):long())
-    local z = W:t() * sparse_train_subset_x
-    local py_x = softmax(z)
-    local max, pred = py_x:max(1)
-    local accuracy = pred:int():resize(pred:size(2)):eq(train_subset_y):double():mean()
-    print('Training subset accuracy: ' .. accuracy)
+    local acc = accuracy(sparse_train_subset_x, train_subset_y)
+    print('Training subset accuracy: ' .. acc)
 
-    local sparse_valid_x = sparsify(valid_x:index(1, torch.range(1, valid_x:size(1)):long())):t()
-    z = W:t() * sparse_valid_x
-    py_x = softmax(z)
-    max, pred = py_x:max(1)
-    accuracy = pred:int():resize(pred:size(2)):eq(valid_y):double():mean()
-    print('Validation accuracy: ' .. accuracy)
+    local sparse_valid_x = sparsify(valid_x):t()
+    acc = accuracy(sparse_valid_x, valid_y)
+    print('Validation accuracy: ' .. acc)
   end -- End epoch evaluation
+
+  -- Test predictions for Kaggle
+  local sparse_test_x = sparsify(test_x):t()
+  local z = W:t() * sparse_test_x
+  local py_x = softmax(z)
+  local max, pred = py_x:max(1)
+  writeToFile(pred:int():resize(pred:size(2)))
 
   print('Logistic regression model training complete!')
 end
@@ -238,8 +258,9 @@ function main()
   opt = cmd:parse(arg)
   alpha = opt.alpha
   lr = opt.lr
-  l2_reg = opt.l2_reg
+  lambda = opt.lambda
   n_epochs = opt.n_epochs
+  batch_size = opt.m
 
   local f = hdf5.open(opt.datafile, 'r')
   nclasses = f:read('nclasses'):all():long()[1]
