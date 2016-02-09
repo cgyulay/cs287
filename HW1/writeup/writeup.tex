@@ -2,32 +2,30 @@
 \documentclass[11pt]{article}
 
 \usepackage{common}
-\title{HW0: Sample Assignment}
-\author{Alexander Rush \\ srush@seas.harvard.edu \and Sam Wiseman \\ swiseman@seas.harvard.edu }
+\title{HW1: Text Classification}
+\author{Alex Saich \\ asaich@college.harvard.edu \and Colton Gyulay \\ cgyulay@college.harvard.edu }
 \begin{document}
 
 \maketitle{}
 \section{Introduction}
 
-This note lays out our expectation for a homework submission in
-\textit{CS287: Statistical Natural Language Processing}. While you do
-not have to follow this template to the letter, we do expect that
-write-ups have a very clear structure and cover all the elements
-described in this note. With this in mind, the burden is on the
-presenter to demonstrate why deviations from the standard are
-necessary.
+For the first assignment of \textit{CS287} we are tasked with text classification, specifically within the realm of movie reviews. Our datasets consisted of short strings of words each labeled with a rating in the range $1- 5$. These ratings correspond to each reviewers' sentiment in regard to the film, where lower ratings correspond generally to negative language.
 
-All write-ups should include a short introduction. In this section you
-should summarize the underlying problem in high-level language and
-describe the extensions that you have decided to propose in your
-implementation. When you describe these extensions you should
-carefully cite the papers of interest. For instance, it will often be
-useful to cite the work seen in class
-\citep{murphy2012machine}. Alternatively, you can also cite papers
-inline, for instance the work of \citet{berger1996maximum}.
+We utilized three different models to learn the statistical associations between specific vocabulary and sentiment. These include a naive Bayes model \citep{murphy2012machine}, a logistic regression model, and a linear support vector machine \citep{wang2012baselines}. The naive Bayes model learned the underlying class distribution and token distribution within these classes, which was then used to predict ratings on examples. The logistic regression and linear SVM models were trained using mini-batch stochastic gradient descent.
 
 
 \section{Problem Description}
+
+\subsection{Dataset}
+
+Our data initially came in the format of a string of words (for example, "undeniably fascinating and playful fellow") associated with a class \textit{c} in the range $1- 5$. The total set of vocabulary $\mcV$ seen across training examples included around $17000$ words. We converted each example to a vector $\boldx_{\scriptscriptstyle 1\times \mcV}$ where each index represented the number of occurrences of a specific token within that example.
+
+\subsection{Naive Bayes}
+
+
+For the naive Bayes model, we first compiled a prior probability matrix $\boldY_{\scriptscriptstyle 1\times c}$ to model $P(c)$. We then built a class-word probability matrix $\boldM_{\scriptscriptstyle c\times \mcV}$ that indicates the probability that a word is associated with a given class. $\boldM$ models $P(x|c)$.
+
+\subsection{Logistic Regression and $\boldL_{\scriptscriptstyle 2}$ SVM}
 
 In general, homeworks will be specified using informal
 language. As part of the assignment, we expect you to write-out a
