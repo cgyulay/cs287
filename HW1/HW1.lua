@@ -8,9 +8,10 @@ cmd:option('-datafile', '', 'data file')
 cmd:option('-classifier', 'nb', 'classifier to use')
 cmd:option('-alpha', 1.0, 'Laplace smoothing coefficient')
 cmd:option('-lr', 0.01, 'learning rate')
-cmd:option('-lambda', 0.01, 'l2 regularization coefficient')
+cmd:option('-lambda', 0.05, 'l2 regularization coefficient')
 cmd:option('-n_epochs', 3, 'number of training epochs')
 cmd:option('-m', 20, 'minibatch size')
+cmd:option('-kfold', 10, 'number of k-folds')
 -- Flag, default, description
 
 function nb_predict(set, word_occurrences, p_y)
@@ -35,6 +36,7 @@ function nb_predict(set, word_occurrences, p_y)
 
   return pred
 end
+
 
 function naive_bayes()
   print('Building naive bayes model...')
@@ -130,15 +132,17 @@ end
 
 -- function cross_entropy_loss(py_x, y_onehot, L2)
 
---   local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
 -- function sigmoid(x)
 --   return torch.ones(x:size()):cdiv(torch.exp(-x) + 1.0)
 -- end
 
-function cross_entropy_loss(py_x, y_onehot)
+function cross_entropy_loss(py_x, y_onehot, L2)
   -- Negative log probability of each correct class
+  local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
+
   local y = torch.cmul(py_x+L2, y_onehot):sum(1)
   local loss = -torch.log(y)
+
   return dL_dz, loss
 end
 
@@ -148,7 +152,8 @@ function hinge_loss(z, y_onehot, L2)
   y_true:mul(1000)
 
     -- find next highest value and its index
-  y_pred, y_pred_index = torch.max(torch.Tensor(z:size()):copy(z):csub(y_onehot), 1)
+  y_pred, y_pred_index = torch.max(torch.Tensor(z:size()):copy(z):csub(y_true), 1)
+
 
   local dL_dz = torch.zeros(nclasses, batch_size)
 
@@ -167,6 +172,110 @@ function hinge_loss(z, y_onehot, L2)
   local loss = torch.cmax(y_pred:csub(true_vals):add(1), 0)
 
   return dL_dz, loss
+end
+
+function accuracy(x, y, W)
+  local z = W:t() * x
+  local py_x = softmax(z)
+  local max, pred = py_x:max(1)
+  return pred:int():resize(pred:size(2)):eq(y):double():mean()
+end
+-- function kfolds(x, y, k)
+--   local subset_size = x:size(1)/k
+
+--   subsets = torch.range(1,x:size(1)-subset_size, subset_size)
+
+  -- local sparse_train_subset_x = sparsify(train_x:index(1, torch.range(subset_start, subset_end):long())):t()
+  -- local train_subset_y = train_y:index(1, torch.range(subset_start, subset_end):long())
+function kfolds_logistic(loss_fn, k)
+  k=10
+  print("Beginning K-fold Cross-Validation")
+  -- Pass over full training dataset n_epochs times
+  local subset_size = train_x:size(1)/k
+  -- subsets = torch.range(1,x:size(1)-subset_size, subset_size)
+  -- local x = sparsify(train_x:index(1, torch.range(batch_start, batch_end):long())):t()
+  -- local y = train_y:index(1, torch.range(batch_start, batch_end):long()):resize(1, batch_size)
+  -- local y_onehot = onehot(y, nclasses)
+  order = torch.randperm(train_x:size(1))
+  subsets = torch.range(1,order:size(1)-subset_size, subset_size)
+  n_train_batches = 1000
+
+
+  W_agg = torch.DoubleTensor(nfeatures,nclasses):fill(0)
+  b_agg = torch.DoubleTensor(nclasses):fill(0)
+
+  for i=0, subsets:size(1)-1 do
+    print("Current k-fold iteration: " .. i+1 .."/"..k)
+    -- print(subsets)
+    local valid_set = i
+    -- print(valid_set)
+
+    local W = torch.DoubleTensor(nfeatures, nclasses):fill(0)
+    local b = torch.DoubleTensor(nclasses)
+    b = torch.expand(b:resize(nclasses,1), nclasses, batch_size):fill(0) -- For minibatch
+
+    for j = 0, subsets:size(1) do
+      if j == valid_set then
+        n=0
+      else
+        print("  Current Fold: " .. j+1 .. "/" ..k)
+        for k = 0, n_train_batches do
+          local batch_start = torch.random(i*subset_size+1, (i+1)*subset_size)
+          local batch_end = math.min((batch_start + batch_size - 1), order:size(1)) 
+
+          -- print(batch_start .." - " .. batch_end)
+          batch = torch.Tensor(order[{{batch_start,batch_end}}])
+
+          local x_rand = sparsify(train_x:index(1, batch:long())):t()
+          local y_rand = train_y:index(1, batch:long()):resize(1, batch_size)
+          local y_onehot = onehot(y_rand, nclasses)
+          local z = W:t()*x_rand + b 
+
+        -- l2 regularization
+          local l2 = torch.cmul(W, W):sum() * lambda / 2.
+
+          if loss_fn == 'cross_entropy' then
+            local py_x = torch.exp(softmax(z))
+            dL_dz, loss = cross_entropy_loss(py_x, y_onehot, l2)
+          elseif loss_fn == 'hinge' then
+            dL_dz, loss = hinge_loss(z, y_onehot, l2)
+          end
+
+          if k % 100 == 0 then
+            print('    Loss after ' .. k .. ' minibatches: ' .. loss:sum())
+          end
+
+          local W_grad = x_rand * dL_dz:t()
+          local b_grad = torch.expand(torch.mean(dL_dz, 2), nclasses, batch_size)
+
+          local decay = (1 - (lr * lambda) / 10.0)
+          W = (W * decay) - (W_grad * lr)
+          b = (b * decay) - (b_grad * lr)
+        end
+
+      end
+      -- validate 
+      
+    end
+    print("K-fold Iteration " .. i+1 .. " Complete")
+    valid_batch = torch.Tensor(order[{{(1+valid_set*subset_size),((valid_set+1)*subset_size)}}])
+
+    local valid_x = sparsify(train_x:index(1, valid_batch:long())):t()
+    local valid_y = train_y:index(1, valid_batch:long())
+    local acc = accuracy(valid_x, valid_y, W)
+    print("Iteration " .. i+1 .. " Accuracy Score: " .. acc)
+
+    W_agg = W_agg + W:mul(1/subsets:size(1))
+
+    b_agg = b_agg + b[{{}, 2}]:mul(1/subsets:size(1))
+
+    -- validate on current set
+  end
+  local sparse_test_x = sparsify(test_x):t()
+  local z = W_agg:t() * sparse_test_x + b_agg
+  local py_x = softmax(z)
+  local max, pred = py_x:max(1)
+  writeToFile(pred:int():resize(pred:size(2)))
 end
 
 function logistic_regression(loss_fn)
@@ -200,16 +309,16 @@ function logistic_regression(loss_fn)
   acc = accuracy(sparse_valid_x, valid_y)
   print('Untrained validation accuracy: ' .. acc)
 
-
   -- TODO:
   -- Fix bias weights and gradient
   -- Implement training over n_epochs
   -- Timing check each epoch on train and valid
   -- Figure out how loss could go below 0 (hint: it shouldn't)
   -- Implement hinge loss and separate out sgd code
-  
   -- Pass over full training dataset n_epochs times
+
   for i = 1, n_epochs do
+
     -- Minibatch forward pass and gradient calculation
     print('Beginning epoch ' .. i .. ' training...')
     for j = 0, n_train_batches do
@@ -337,8 +446,9 @@ function main()
     linear_svm()
   elseif opt.classifier == 'nn' then
     multilayer_logistic_regression()
+  elseif opt.classifier =='kf' then
+    kfolds_logistic('cross_entropy', 10)
   end
-
   -- Test
 end
 
