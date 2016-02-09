@@ -122,13 +122,49 @@ function softmax(x)
   return soft
 end
 
-function cross_entropy_loss(py_x, y_onehot)
+-- function cross_entropy_loss(py_x, y_onehot)
+--   -- Negative log probability of each correct class
+--   y = torch.cmul(py_x, y_onehot):sum(1)
+--   return -torch.log(y):sum()
+-- end
+
+function cross_entropy_loss(py_x, y_onehot, L2)
+
+  local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
   -- Negative log probability of each correct class
-  y = torch.cmul(py_x, y_onehot):sum(1)
-  return -torch.log(y):sum()
+  local y = torch.cmul(py_x+L2, y_onehot):sum(1)
+  local loss = -torch.log(y)
+  return dL_dz, loss
 end
 
-function logistic_regression()
+function hinge_loss(z, y_onehot, L2)
+  local y_true = torch.Tensor(y_onehot:size()):copy(y_onehot)
+  true_vals, y_true_index = torch.max(y_true, 1)
+  y_true:mul(1000)
+
+    -- find next highest value and its index
+  y_pred, y_pred_index = torch.max(torch.Tensor(z:size()):copy(z):csub(y_onehot), 1)
+
+  local dL_dz = torch.zeros(nclasses, batch_size)
+
+  for i = 1, dL_dz:size(2) do
+    local curr_yp = y_pred_index[1][i]
+    local curr_yt = y_true_index[1][i]
+
+    if true_vals[1][i] - y_pred[1][i] > 1 then
+      -- print("Minimum Difference Reached: ".. true_vals[1][i] - y_pred[1][i])
+      n = 0
+    else
+      dL_dz[curr_yp][i] = 1
+      dL_dz[curr_yt][i] = -1
+    end
+  end
+  local loss = torch.cmax(y_pred:csub(true_vals):add(1), 0)
+
+  return dL_dz, loss
+end
+
+function logistic_regression(loss_fn)
   print('Building logistic regression model...')
 
   -- Create sparse representation of training/validation data
@@ -143,7 +179,8 @@ function logistic_regression()
 
   local W = torch.DoubleTensor(nfeatures, nclasses)
   local b = torch.DoubleTensor(nclasses)
-  -- b = torch.expand(b:resize(nclasses,1), nclasses, batch_size) -- For minibatch
+  b = torch.expand(b:resize(nclasses,1), nclasses, batch_size):fill(0) -- For minibatch
+  W:fill(0)
 
   -- Calculates accuracy on (pred, label) pairs
   function accuracy(x, y)
@@ -190,37 +227,44 @@ function logistic_regression()
       local y_onehot = onehot(y, nclasses)
 
       -- Currently the bias breaks things
-      local z = W:t() * x -- + b -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
-      local log_soft = softmax(z)
-      local py_x = torch.exp(log_soft)
+      local z = W:t() * x + b -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
+      -- local log_soft = softmax(z)
+      -- local py_x = torch.exp(log_soft)
       
       -- l2 regularization
-      local l2 = torch.cmul(W, W):sum() * lambda / 2.0
+      local l2 = torch.cmul(W, W):sum() * lambda / 2.
+
+      if loss_fn == 'cross_entropy' then
+        local py_x = torch.exp(softmax(z))
+        dL_dz, loss = cross_entropy_loss(py_x, y_onehot, l2)
+      elseif loss_fn == 'hinge' then
+        dL_dz, loss = hinge_loss(z, y_onehot, l2)
+      end
 
       -- Loss fn
-      local loss = cross_entropy_loss(py_x + l2, y_onehot)
+      -- local loss = cross_entropy_loss(py_x + l2, y_onehot)
 
       if j % 1000 == 0 then
-        print('Loss after ' .. j .. ' minibatches: ' .. loss)
+        print('Loss after ' .. j .. ' minibatches: ' .. loss:sum())
       end
 
       -- Calculate grads and update weights
       -- py_x but subtract 1 from correct class
       -- size nclasses x batch_size
-      local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
+      -- local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
       
       local W_grad = x * dL_dz:t()
-      -- local b_grad = torch.expand(torch.mean(dL_dz, 2), nclasses, batch_size)
+      local b_grad = torch.expand(torch.mean(dL_dz, 2), nclasses, batch_size)
 
       assert(W_grad:size(1) == W:size(1))
       assert(W_grad:size(2) == W:size(2))
-      -- assert(b_grad:size(1) == b:size(1))
-      -- assert(b_grad:size(2) == b:size(2))
+      assert(b_grad:size(1) == b:size(1))
+      assert(b_grad:size(2) == b:size(2))
 
       -- Update weights
       local decay = (1 - (lr * lambda) / 10.0)
       W = (W * decay) - (W_grad * lr)
-      -- b = (b * decay) - (b_grad * lr)
+      b = (b * decay) - (b_grad * lr)
     end -- End minibatch sgd
 
     print('Epoch ' .. i .. ' training complete!')
@@ -279,8 +323,10 @@ function main()
   -- Train
   if opt.classifier == 'nb' then
     naive_bayes()
-  elseif opt.classifier == 'lr' then
-    logistic_regression()
+  elseif opt.classifier == 'lr-cross' then
+    logistic_regression('cross_entropy')
+  elseif opt.classifier == 'lr-hinge' then
+    logistic_regression('hinge')
   elseif opt.classifier == 'svm' then
     linear_svm()
   end
