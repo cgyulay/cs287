@@ -15,19 +15,24 @@ cmd:option('-kfold', 10, 'number of k-folds')
 -- Flag, default, description
 
 function nb_predict(set, word_occurrences, p_y)
+
+  -- initialize tensor for predictions
   local pred = torch.IntTensor(set:size(1))
   for e = 1, set:size(1) do
     local example = set[e]
     local p_y_hat = torch.zeros(nclasses)
     for i = 1, nclasses do
+      -- set prior probability
       p_y_hat[i] = p_y[i]
 
+      -- multiply by conditional if not space (1)
       example:apply(function(w)
         if w ~= 1 then
           p_y_hat[i] = p_y_hat[i] * word_occurrences[i][w]
         end
       end)
     end
+    -- normalize
     p_y_hat = p_y_hat / torch.sum(p_y_hat)
     val, prediction = torch.max(p_y_hat, 1)
 
@@ -83,14 +88,14 @@ function naive_bayes()
 end
 
 function sparsify(dense)
-  -- Loops are prohibitively slow...unusuable for whole dataset
-  -- TODO: redo with torch:scatter
+  -- intialize sparse matrix
   sparse = torch.zeros(dense:size(1), nfeatures)
 
+  -- Loops are prohibitively slow...unusuable for whole dataset
   for i = 1, dense:size(1) do
     for j = 1, dense:size(2) do
       idx = dense[i][j]
-      -- print(idx)
+
       if idx ~= 1 then
         sparse[i][idx] = sparse[i][idx] + 1
       end
@@ -104,6 +109,7 @@ function sparsify(dense)
   return sparse
 end
 
+-- return one-hot vector of scalar classes
 function onehot(y, nclasses)
   local y_onehot = torch.zeros(nclasses, y:size(2))
   return y_onehot:scatter(1, y:long(), 1)
@@ -112,11 +118,15 @@ end
 function softmax(x)
   s1 = x:size(1)
   s2 = x:size(2)
+
+  -- M
   max = torch.max(x, 1):expand(s1, s2)
+
   e_x = torch.exp(torch.csub(x, max)) -- + max
   log_exp = torch.expand(torch.log(torch.sum(e_x, 1)), s1, s2) + max
-  -- soft = torch.exp(torch.csub(x, log_exp)) -- p(y|x)
-  soft = torch.csub(x, log_exp) -- LogSoftMax
+
+  -- LogSoftMax
+  soft = torch.csub(x, log_exp) 
 
   -- Enforce normalization
   -- soft = torch.cdiv(soft, torch.sum(soft, 1):expand(s1, s2))
@@ -124,22 +134,11 @@ function softmax(x)
   return soft
 end
 
--- function cross_entropy_loss(py_x, y_onehot)
---   -- Negative log probability of each correct class
---   y = torch.cmul(py_x, y_onehot):sum(1)
---   return -torch.log(y):sum()
--- end
-
--- function cross_entropy_loss(py_x, y_onehot, L2)
-
--- function sigmoid(x)
---   return torch.ones(x:size()):cdiv(torch.exp(-x) + 1.0)
--- end
-
 function cross_entropy_loss(py_x, y_onehot, L2)
-  -- Negative log probability of each correct class
+  -- calculate gradient using the predictions
   local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
 
+  -- Negative log probability of each correct class
   local y = torch.cmul(py_x+L2, y_onehot):sum(1)
   local loss = -torch.log(y)
 
@@ -147,69 +146,73 @@ function cross_entropy_loss(py_x, y_onehot, L2)
 end
 
 function hinge_loss(z, y_onehot, L2)
-  local y_true = torch.Tensor(y_onehot:size()):copy(y_onehot)
-  true_vals, y_true_index = torch.max(y_true, 1)
-  y_true:mul(1000)
 
-    -- find next highest value and its index
+  local y_true = torch.Tensor(y_onehot:size()):copy(y_onehot)
+
+  -- find true value and its index 
+  true_vals, y_true_index = torch.max(y_true, 1)
+
+  -- find next highest value and its index
+  -- subtract 1000 from correct class so it doesn't show up as max
+  y_true:mul(1000)
   y_pred, y_pred_index = torch.max(torch.Tensor(z:size()):copy(z):csub(y_true), 1)
 
 
   local dL_dz = torch.zeros(nclasses, batch_size)
 
   for i = 1, dL_dz:size(2) do
+    -- find index spot of true val and predicted val
     local curr_yp = y_pred_index[1][i]
     local curr_yt = y_true_index[1][i]
 
+    -- if (yhat_c - yhat_c') > 1 then do nothing
     if true_vals[1][i] - y_pred[1][i] > 1 then
       -- print("Minimum Difference Reached: ".. true_vals[1][i] - y_pred[1][i])
       n = 0
+    -- else yhat_c = -1 and yhat_c' = 1
     else
       dL_dz[curr_yp][i] = 1
       dL_dz[curr_yt][i] = -1
     end
   end
+
   local loss = torch.cmax(y_pred:csub(true_vals):add(1), 0)
 
   return dL_dz, loss
 end
 
-function accuracy(x, y, W)
+-- calculate accuracy of Wx + b using y
+function accuracy(x, y, W, b)
   local z = W:t() * x
   local py_x = softmax(z)
   local max, pred = py_x:max(1)
   return pred:int():resize(pred:size(2)):eq(y):double():mean()
 end
--- function kfolds(x, y, k)
---   local subset_size = x:size(1)/k
 
---   subsets = torch.range(1,x:size(1)-subset_size, subset_size)
-
-  -- local sparse_train_subset_x = sparsify(train_x:index(1, torch.range(subset_start, subset_end):long())):t()
-  -- local train_subset_y = train_y:index(1, torch.range(subset_start, subset_end):long())
 function kfolds_logistic(loss_fn, k)
-  k=10
   print("Beginning K-fold Cross-Validation")
-  -- Pass over full training dataset n_epochs times
+
+  -- calculate size of each k-fold group
   local subset_size = train_x:size(1)/k
-  -- subsets = torch.range(1,x:size(1)-subset_size, subset_size)
-  -- local x = sparsify(train_x:index(1, torch.range(batch_start, batch_end):long())):t()
-  -- local y = train_y:index(1, torch.range(batch_start, batch_end):long()):resize(1, batch_size)
-  -- local y_onehot = onehot(y, nclasses)
+
+  -- randomly sample k groups from training data
   order = torch.randperm(train_x:size(1))
   subsets = torch.range(1,order:size(1)-subset_size, subset_size)
+
+
   n_train_batches = 1000
 
-
+  -- intialize aggregate weights
   W_agg = torch.DoubleTensor(nfeatures,nclasses):fill(0)
   b_agg = torch.DoubleTensor(nclasses):fill(0)
 
   for i=0, subsets:size(1)-1 do
     print("Current k-fold iteration: " .. i+1 .."/"..k)
-    -- print(subsets)
-    local valid_set = i
-    -- print(valid_set)
 
+    -- pick one validation set
+    local valid_set = i
+
+    -- initialize weights for current iteration
     local W = torch.DoubleTensor(nfeatures, nclasses):fill(0)
     local b = torch.DoubleTensor(nclasses)
     b = torch.expand(b:resize(nclasses,1), nclasses, batch_size):fill(0) -- For minibatch
@@ -220,9 +223,10 @@ function kfolds_logistic(loss_fn, k)
       else
         print("  Current Fold: " .. j+1 .. "/" ..k)
         for k = 0, n_train_batches do
+
+          -- randomly select mini-batch from current group k
           local batch_start = torch.random(i*subset_size+1, (i+1)*subset_size)
           local batch_end = math.min((batch_start + batch_size - 1), order:size(1)) 
-
           -- print(batch_start .." - " .. batch_end)
           batch = torch.Tensor(order[{{batch_start,batch_end}}])
 
@@ -231,9 +235,10 @@ function kfolds_logistic(loss_fn, k)
           local y_onehot = onehot(y_rand, nclasses)
           local z = W:t()*x_rand + b 
 
-        -- l2 regularization
+          -- l2 regularization
           local l2 = torch.cmul(W, W):sum() * lambda / 2.
 
+          -- calculate partial derivatives and loss
           if loss_fn == 'cross_entropy' then
             local py_x = torch.exp(softmax(z))
             dL_dz, loss = cross_entropy_loss(py_x, y_onehot, l2)
@@ -241,36 +246,39 @@ function kfolds_logistic(loss_fn, k)
             dL_dz, loss = hinge_loss(z, y_onehot, l2)
           end
 
-          if k % 100 == 0 then
-            print('    Loss after ' .. k .. ' minibatches: ' .. loss:sum())
-          end
+          -- if k % 100 == 0 then
+          --   print('    Loss after ' .. k .. ' minibatches: ' .. loss:sum())
+          -- end
 
+          -- calculate gradients
           local W_grad = x_rand * dL_dz:t()
           local b_grad = torch.expand(torch.mean(dL_dz, 2), nclasses, batch_size)
 
+          -- update weights
           local decay = (1 - (lr * lambda) / 10.0)
           W = (W * decay) - (W_grad * lr)
           b = (b * decay) - (b_grad * lr)
         end
-
-      end
-      -- validate 
-      
+      end      
     end
-    print("K-fold Iteration " .. i+1 .. " Complete")
-    valid_batch = torch.Tensor(order[{{(1+valid_set*subset_size),((valid_set+1)*subset_size)}}])
 
+
+    print("K-fold Iteration " .. i+1 .. " Complete")
+
+    -- calculate accuracy on validation set
+    local valid_batch = torch.Tensor(order[{{(1+valid_set*subset_size),((valid_set+1)*subset_size)}}])
     local valid_x = sparsify(train_x:index(1, valid_batch:long())):t()
     local valid_y = train_y:index(1, valid_batch:long())
-    local acc = accuracy(valid_x, valid_y, W)
+    local acc = accuracy(valid_x, valid_y, W, b)
     print("Iteration " .. i+1 .. " Accuracy Score: " .. acc)
 
+    -- add k-fold iteration weights to aggregate weights
     W_agg = W_agg + W:mul(1/subsets:size(1))
-
     b_agg = b_agg + b[{{}, 2}]:mul(1/subsets:size(1))
 
-    -- validate on current set
   end
+
+  -- test predictions on Kaggle
   local sparse_test_x = sparsify(test_x):t()
   local z = W_agg:t() * sparse_test_x + b_agg
   local py_x = softmax(z)
@@ -296,26 +304,11 @@ function logistic_regression(loss_fn)
   b = torch.expand(b:resize(nclasses,1), nclasses, batch_size):fill(0) -- For minibatch
   W:fill(0)
 
-  -- Calculates accuracy on (pred, label) pairs
-  function accuracy(x, y)
-    local z = W:t() * x
-    local py_x = softmax(z)
-    local max, pred = py_x:max(1)
-    return pred:int():resize(pred:size(2)):eq(y):double():mean()
-  end
 
   -- Start with an initial benchmark for validation accuracy
   local sparse_valid_x = sparsify(valid_x):t()
   acc = accuracy(sparse_valid_x, valid_y)
   print('Untrained validation accuracy: ' .. acc)
-
-  -- TODO:
-  -- Fix bias weights and gradient
-  -- Implement training over n_epochs
-  -- Timing check each epoch on train and valid
-  -- Figure out how loss could go below 0 (hint: it shouldn't)
-  -- Implement hinge loss and separate out sgd code
-  -- Pass over full training dataset n_epochs times
 
   for i = 1, n_epochs do
 
@@ -323,13 +316,6 @@ function logistic_regression(loss_fn)
     print('Beginning epoch ' .. i .. ' training...')
     for j = 0, n_train_batches do
 
-      -- Dim 2 is batch
-      -- Sample in order from prepopulated sparse dataset
-      -- local batch_start = j * batch_size + 1
-      -- local batch_end = (j + 1) * batch_size
-      -- local x = sparse_train_x:index(1, torch.range(batch_start, batch_end):long()):t()
-      -- local y = train_y:index(1, torch.range(batch_start, batch_end):long()):resize(1, batch_size)
-      -- local y_onehot = onehot(y, nclasses)
 
       -- Sample random batch and sparsify on the fly
       local batch_start = torch.random(1, train_x:size(1) - batch_size)
@@ -338,17 +324,12 @@ function logistic_regression(loss_fn)
       local y = train_y:index(1, torch.range(batch_start, batch_end):long()):resize(1, batch_size)
       local y_onehot = onehot(y, nclasses)
 
-      -- Currently the bias breaks things
-      local z = W:t() * x + b -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
-      -- local log_soft = softmax(z)
-      -- local py_x = torch.exp(log_soft)
-      -- local z = W:t() * x -- + b -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
-      -- local log_soft = softmax(z)
-      -- local py_x = torch.exp(log_soft)
-      
+      local z = W:t() * x + b 
+
       -- l2 regularization
       local l2 = torch.cmul(W, W):sum() * lambda / 2.
 
+      -- calculate partial derivatives and loss
       if loss_fn == 'cross_entropy' then
         local py_x = torch.exp(softmax(z))
         dL_dz, loss = cross_entropy_loss(py_x, y_onehot, l2)
@@ -356,18 +337,12 @@ function logistic_regression(loss_fn)
         dL_dz, loss = hinge_loss(z, y_onehot, l2)
       end
 
-      -- Loss fn
-      -- local loss = cross_entropy_loss(py_x + l2, y_onehot)
 
-      if j % 1000 == 0 then
-        print('Loss after ' .. j .. ' minibatches: ' .. loss:sum())
-      end
+      -- if j % 1000 == 0 then
+      --   print('Loss after ' .. j .. ' minibatches: ' .. loss:sum())
+      -- end
 
-      -- Calculate grads and update weights
-      -- py_x but subtract 1 from correct class
-      -- size nclasses x batch_size
-      -- local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
-      
+      -- calculate gradients
       local W_grad = x * dL_dz:t()
       local b_grad = torch.expand(torch.mean(dL_dz, 2), nclasses, batch_size)
 
@@ -385,16 +360,17 @@ function logistic_regression(loss_fn)
     print('Epoch ' .. i .. ' training complete!')
     print('Evaluating accuracy on training subset and validation set...')
 
+    -- calculate accuracy on subset
     local subset_size = 50000
     local subset_start = torch.random(1, train_x:size(1) - subset_size)
     local subset_end = subset_start + subset_size - 1
     local sparse_train_subset_x = sparsify(train_x:index(1, torch.range(subset_start, subset_end):long())):t()
     local train_subset_y = train_y:index(1, torch.range(subset_start, subset_end):long())
-    local acc = accuracy(sparse_train_subset_x, train_subset_y)
+    local acc = accuracy(sparse_train_subset_x, train_subset_y, W, b)
     print('Training subset accuracy: ' .. acc)
 
     local sparse_valid_x = sparsify(valid_x):t()
-    acc = accuracy(sparse_valid_x, valid_y)
+    acc = accuracy(sparse_valid_x, valid_y, W, b)
     print('Validation accuracy: ' .. acc)
   end -- End epoch evaluation
 
@@ -420,6 +396,7 @@ function main()
   lambda = opt.lambda
   n_epochs = opt.n_epochs
   batch_size = opt.m
+  kf = opt.kfold
 
   local f = hdf5.open(opt.datafile, 'r')
   nclasses = f:read('nclasses'):all():long()[1]
@@ -446,8 +423,10 @@ function main()
     linear_svm()
   elseif opt.classifier == 'nn' then
     multilayer_logistic_regression()
-  elseif opt.classifier =='kf' then
-    kfolds_logistic('cross_entropy', 10)
+  elseif opt.classifier =='kf-cross' then
+    kfolds_logistic('cross_entropy', kf) 
+  elseif opt.classifier =='kf-hinge' then
+    kfolds_logistic('hinge', kf)
   end
   -- Test
 end
