@@ -18,12 +18,11 @@ We utilized three different models to learn the statistical associations between
 
 \subsection{Dataset}
 
-Our data initially came in the format of a string of words (for example, "undeniably fascinating and playful fellow") associated with a class \textit{c} in the range $1- 5$. The total set of vocabulary $\mcV$ seen across training examples included around $17000$ words. We converted each example to a vector $\boldx_{\scriptscriptstyle 1\times \mcV}$ where each index represented the number of occurrences of a specific token within that example.
+Our data initially came in the format of a string of words (for example, "undeniably fascinating and playful fellow") associated with a class \textit{y} in the range $1- 5$. The total set of vocabulary $\mcV$ seen across training examples included around $17000$ words. We converted each example to a vector $\boldx_{\scriptscriptstyle 1\times \mcV}$ where each index represented the number of occurrences of a specific token within that example.
 
 \subsection{Naive Bayes}
 
-
-For the naive Bayes model, we first compiled a prior probability matrix $\boldY_{\scriptscriptstyle 1\times c}$ to model $P(c)$. We then built a class-word probability matrix $\boldM_{\scriptscriptstyle c\times \mcV}$ that indicates the probability that a word is associated with a given class. $\boldM$ models $P(x|c)$.
+For the naive Bayes model, we first compiled a prior probability matrix $\boldY_{\scriptscriptstyle 1\times c}$ to model $P(y)$. We then built a class-word probability matrix $\boldM_{\scriptscriptstyle c\times \mcV}$ that indicates the probability that a word is associated with a given class. $\boldM$ models $P(x|y)$.
 
 \subsection{Logistic Regression and $\boldL_{\scriptscriptstyle 2}$ SVM}
 

@@ -1,13 +1,13 @@
 # Fdb version 3
-["bibtex writeup"] 1454972989 "writeup.aux" "writeup.bbl" "writeup" 1454973682
+["bibtex writeup"] 1454972989 "writeup.aux" "writeup.bbl" "writeup" 1454976566
   "/usr/local/texlive/2015/texmf-dist/bibtex/bst/base/apalike.bst" 1292289607 24635 604dafcc79f521a11ea73e506e1fbd98 ""
-  "writeup.aux" 1454973682 1238 287fb12f59f4b88af5972793affcdc7b ""
+  "writeup.aux" 1454976566 1238 287fb12f59f4b88af5972793affcdc7b ""
   "writeup.bcf" 0 -1 0 ""
   "writeup.bib" 1454478091 1995 772098ec4a57601ed29eedbafb4a36a6 ""
   (generated)
   "writeup.bbl"
   "writeup.blg"
-["pdflatex"] 1454973681 "writeup.tex" "writeup.pdf" "writeup" 1454973682
+["pdflatex"] 1454976565 "writeup.tex" "writeup.pdf" "writeup" 1454976566
   "./cluster_viz.png" 1454478091 70986 1e97ac6984a990e66e3759605f16f89b ""
   "./network.png" 1454478091 38053 585639aea954e6147dbc92d57ff19965 ""
   "/usr/local/texlive/2015/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
@@ -112,10 +112,10 @@
   "cluster_viz.png" 1454478091 70986 1e97ac6984a990e66e3759605f16f89b ""
   "common.sty" 1454478091 4675 2a6ef3bd379c9ec0c78f67cb8229ab12 ""
   "network.png" 1454478091 38053 585639aea954e6147dbc92d57ff19965 ""
-  "writeup.aux" 1454973682 1238 287fb12f59f4b88af5972793affcdc7b ""
+  "writeup.aux" 1454976566 1238 287fb12f59f4b88af5972793affcdc7b ""
   "writeup.bbl" 1454972989 563 33757a851c7c245daa5427e57ee89682 "bibtex writeup"
-  "writeup.tex" 1454973681 7064 8081849f743fcf271113adaf6e65bc5a ""
+  "writeup.tex" 1454976482 7064 fd0a1afc7728c0ddb0cbf015c6034f32 ""
   (generated)
-  "writeup.log"
-  "writeup.pdf"
   "writeup.aux"
+  "writeup.pdf"
+  "writeup.log"
