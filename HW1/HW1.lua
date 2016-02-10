@@ -1,5 +1,6 @@
 -- Only requirement allowed
 require("hdf5")
+require("gnuplot")
 
 cmd = torch.CmdLine()
 
@@ -45,7 +46,6 @@ function naive_bayes()
   local double_output = train_y:double()
   local p_y = torch.histc(double_output, nclasses)
   p_y = p_y / torch.sum(p_y)
-  print(p_y)
 
   -- Record number occurrences of each word in each class
   print('Building p(word|class)...')
@@ -287,7 +287,12 @@ function logistic_regression(loss_fn)
   -- local n_examples = 75000 -- train_x:size(1)
   -- local sparse_train_x = sparsify(train_x:index(1, torch.range(1, n_examples):long()))
 
+  -- For plotting progress over epoch
   local n_train_batches = math.floor(train_x:size(1) / batch_size) - 1
+  local train_plot_data = torch.DoubleTensor(n_epochs + 1, 2)
+  local valid_plot_data = torch.DoubleTensor(n_epochs + 1, 2)
+  train_plot_data[{ {},1 }] = torch.range(0, n_epochs)
+  valid_plot_data[{ {},1 }] = torch.range(0, n_epochs)
 
   print('Beginning training...')
 
@@ -304,10 +309,25 @@ function logistic_regression(loss_fn)
     return pred:int():resize(pred:size(2)):eq(y):double():mean()
   end
 
-  -- Start with an initial benchmark for validation accuracy
+  -- Sample random train batch and return accuracy
+  function train_accuracy(subset_size)
+    local subset_start = torch.random(1, train_x:size(1) - subset_size)
+    local subset_end = subset_start + subset_size - 1
+    local sparse_train_subset_x = sparsify(train_x:index(1, torch.range(subset_start, subset_end):long())):t()
+    local train_subset_y = train_y:index(1, torch.range(subset_start, subset_end):long())
+    return accuracy(sparse_train_subset_x, train_subset_y)
+  end
+
+  -- Start with an initial benchmark for train and validation accuracy
   local sparse_valid_x = sparsify(valid_x):t()
   acc = accuracy(sparse_valid_x, valid_y)
-  print('Untrained validation accuracy: ' .. acc)
+  valid_plot_data[1][2] = acc
+  print('Untrained validation set accuracy: ' .. acc)
+
+
+  acc = train_accuracy(50000)
+  train_plot_data[1][2] = acc
+  print('Untrained training set accuracy: ' .. acc)
 
   -- TODO:
   -- Fix bias weights and gradient
@@ -337,14 +357,7 @@ function logistic_regression(loss_fn)
       local x = sparsify(train_x:index(1, torch.range(batch_start, batch_end):long())):t()
       local y = train_y:index(1, torch.range(batch_start, batch_end):long()):resize(1, batch_size)
       local y_onehot = onehot(y, nclasses)
-
-      -- Currently the bias breaks things
-      local z = W:t() * x + b -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
-      -- local log_soft = softmax(z)
-      -- local py_x = torch.exp(log_soft)
-      -- local z = W:t() * x -- + b -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
-      -- local log_soft = softmax(z)
-      -- local py_x = torch.exp(log_soft)
+      local z = W:t() * x -- + b -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
       
       -- l2 regularization
       local l2 = torch.cmul(W, W):sum() * lambda / 2.
@@ -369,41 +382,43 @@ function logistic_regression(loss_fn)
       -- local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
       
       local W_grad = x * dL_dz:t()
-      local b_grad = torch.expand(torch.mean(dL_dz, 2), nclasses, batch_size)
+      -- local b_grad = torch.expand(torch.mean(dL_dz, 2), nclasses, batch_size)
 
       assert(W_grad:size(1) == W:size(1))
       assert(W_grad:size(2) == W:size(2))
-      assert(b_grad:size(1) == b:size(1))
-      assert(b_grad:size(2) == b:size(2))
+      -- assert(b_grad:size(1) == b:size(1))
+      -- assert(b_grad:size(2) == b:size(2))
 
       -- Update weights
       local decay = (1 - (lr * lambda) / 10.0)
       W = (W * decay) - (W_grad * lr)
-      b = (b * decay) - (b_grad * lr)
+      -- b = (b * decay) - (b_grad * lr)
     end -- End minibatch sgd
 
     print('Epoch ' .. i .. ' training complete!')
     print('Evaluating accuracy on training subset and validation set...')
 
     local subset_size = 50000
-    local subset_start = torch.random(1, train_x:size(1) - subset_size)
-    local subset_end = subset_start + subset_size - 1
-    local sparse_train_subset_x = sparsify(train_x:index(1, torch.range(subset_start, subset_end):long())):t()
-    local train_subset_y = train_y:index(1, torch.range(subset_start, subset_end):long())
-    local acc = accuracy(sparse_train_subset_x, train_subset_y)
+    
+    local acc = train_accuracy(subset_size)
+    train_plot_data[i + 1][2] = acc
     print('Training subset accuracy: ' .. acc)
 
     local sparse_valid_x = sparsify(valid_x):t()
     acc = accuracy(sparse_valid_x, valid_y)
+    valid_plot_data[i + 1][2] = acc
     print('Validation accuracy: ' .. acc)
   end -- End epoch evaluation
 
+  plot(train_plot_data, 'Logistic Regression Training Accuracy', 'Epochs', 'Accuracy', 'train')
+  plot(valid_plot_data, 'Logistic Regression Validation Accuracy', 'Epochs', 'Accuracy', 'valid')
+
   -- Test predictions for Kaggle
-  local sparse_test_x = sparsify(test_x):t()
-  local z = W:t() * sparse_test_x
-  local py_x = softmax(z)
-  local max, pred = py_x:max(1)
-  writeToFile(pred:int():resize(pred:size(2)))
+  -- local sparse_test_x = sparsify(test_x):t()
+  -- local z = W:t() * sparse_test_x
+  -- local py_x = softmax(z)
+  -- local max, pred = py_x:max(1)
+  -- writeToFile(pred:int():resize(pred:size(2)))
 
   print('Logistic regression model training complete!')
 end
@@ -450,6 +465,20 @@ function main()
     kfolds_logistic('cross_entropy', 10)
   end
   -- Test
+end
+
+-- Misc functions
+
+-- Plotting
+function plot(data, title, xlabel, ylabel, filename)
+  -- NB: requires gnuplot
+  -- gnuplot.raw('set xtics (0, 1, 2, 3, 4, 5)')
+  gnuplot.pngfigure(filename .. '.png')
+  gnuplot.plot(data)
+  gnuplot.title(title)
+  gnuplot.xlabel(xlabel)
+  gnuplot.ylabel(ylabel)
+  gnuplot.plotflush()
 end
 
 -- Writing to file
