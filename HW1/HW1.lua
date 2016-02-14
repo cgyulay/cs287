@@ -260,13 +260,16 @@ function kfolds_logistic(loss_fn, k)
     print("K-fold Iteration " .. i+1 .. " Complete")
     valid_batch = torch.Tensor(order[{{(1+valid_set*subset_size),((valid_set+1)*subset_size)}}])
 
-    local valid_x = sparsify(train_x:index(1, valid_batch:long())):t()
-    local valid_y = train_y:index(1, valid_batch:long())
-    local acc = accuracy(valid_x, valid_y, W)
-    print("Iteration " .. i+1 .. " Accuracy Score: " .. acc)
+    local fold_valid_x = sparsify(train_x:index(1, valid_batch:long())):t()
+    local fold_valid_y = train_y:index(1, valid_batch:long())
+    local acc = accuracy(fold_valid_x, fold_valid_y, W)
+    print("Iteration " .. i+1 .. " accuracy: " .. acc)
+
+    local sparse_valid_x = sparsify(valid_x):t()
+    acc = accuracy(sparse_valid_x, valid_y, W)
+    print('Held out validation accuracy: ' .. acc)
 
     W_agg = W_agg + W:mul(1/subsets:size(1))
-
     b_agg = b_agg + b[{{}, 2}]:mul(1/subsets:size(1))
 
     -- validate on current set
@@ -357,7 +360,7 @@ function logistic_regression(loss_fn)
       local x = sparsify(train_x:index(1, torch.range(batch_start, batch_end):long())):t()
       local y = train_y:index(1, torch.range(batch_start, batch_end):long()):resize(1, batch_size)
       local y_onehot = onehot(y, nclasses)
-      local z = W:t() * x -- + b -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
+      local z = W:t() * x + b -- + torch.expand(b:resize(nclasses, 1), nclasses, batch_size)
       
       -- l2 regularization
       local l2 = torch.cmul(W, W):sum() * lambda / 2.
@@ -382,17 +385,17 @@ function logistic_regression(loss_fn)
       -- local dL_dz = torch.csub(torch.DoubleTensor(py_x:size()):copy(py_x), y_onehot)
       
       local W_grad = x * dL_dz:t()
-      -- local b_grad = torch.expand(torch.mean(dL_dz, 2), nclasses, batch_size)
+      local b_grad = torch.expand(torch.mean(dL_dz, 2), nclasses, batch_size)
 
       assert(W_grad:size(1) == W:size(1))
       assert(W_grad:size(2) == W:size(2))
-      -- assert(b_grad:size(1) == b:size(1))
-      -- assert(b_grad:size(2) == b:size(2))
+      assert(b_grad:size(1) == b:size(1))
+      assert(b_grad:size(2) == b:size(2))
 
       -- Update weights
       local decay = (1 - (lr * lambda) / 10.0)
       W = (W * decay) - (W_grad * lr)
-      -- b = (b * decay) - (b_grad * lr)
+      b = (b * decay) - (b_grad * lr)
     end -- End minibatch sgd
 
     print('Epoch ' .. i .. ' training complete!')
@@ -410,8 +413,8 @@ function logistic_regression(loss_fn)
     print('Validation accuracy: ' .. acc)
   end -- End epoch evaluation
 
-  plot(train_plot_data, 'Logistic Regression Training Accuracy', 'Epochs', 'Accuracy', 'train')
-  plot(valid_plot_data, 'Logistic Regression Validation Accuracy', 'Epochs', 'Accuracy', 'valid')
+  plot(train_plot_data, 'Linear SVM Training Accuracy', 'Epochs', 'Accuracy', 'train')
+  plot(valid_plot_data, 'Linear SVM Validation Accuracy', 'Epochs', 'Accuracy', 'valid')
 
   -- Test predictions for Kaggle
   -- local sparse_test_x = sparsify(test_x):t()
@@ -421,10 +424,6 @@ function logistic_regression(loss_fn)
   -- writeToFile(pred:int():resize(pred:size(2)))
 
   print('Logistic regression model training complete!')
-end
-
-function linear_svm()
-  print('Training linear svm...')
 end
 
 function main()
@@ -457,10 +456,6 @@ function main()
     logistic_regression('cross_entropy')
   elseif opt.classifier == 'lr-hinge' then
     logistic_regression('hinge')
-  elseif opt.classifier == 'svm' then
-    linear_svm()
-  elseif opt.classifier == 'nn' then
-    multilayer_logistic_regression()
   elseif opt.classifier =='kf' then
     kfolds_logistic('cross_entropy', 10)
   end
