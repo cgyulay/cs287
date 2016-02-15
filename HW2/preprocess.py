@@ -75,37 +75,46 @@ def clean_line(line):
 
   return word, pos, case
 
+def create_windows_for_sentences(sentences):
+  '''
+  Takes a list of sentences comprised of lists of cleaned words and creates a series of
+  windows of length dwin.
+  '''
+
+  for s in sentences:
+    # TODO
+
 def get_vocab(file_list):
   '''
   Locates top 100k words across dataset and replace rare words with RARE token.
   Reforms word indexes after removing rare words.
   '''
   # NB: there are fewer than 100k unique tokens in train + valid + test
-  word_counts = {}
+  # (< 40k), so we don't need to create a limited dictionary with RARE tokens
+  word_to_idx = {}
+  sentences = {}
+  sentence = []
+  idx = 2 # padding = idx 1
+
   for filename in file_list:
     if filename:
       with codecs.open(filename, "r", encoding="latin-1") as f:
         print('Extracting vocab from ' + filename + '...')
+        sentences[filename] = []
+
         for line in f:
           word, pos, case = clean_line(line)
-          if word is None: continue
-          if word not in word_counts:
-            word_counts[word] = 0
-          word_counts[word] += 1
-
-  return word_counts
-
-
-  # Build word to index dictionary
-  for filename in file_list:
-    if filename:
-      with codecs.open(filename, "r", encoding="latin-1") as f:
-        for line in f:
-          word, pos, case = clean_line(line)
+          if word is not None:
+            sentence.append((word, pos, case))
+          else:
+            sentences[filename].append(sentence)
+            sentence = []
+            continue
           if word not in word_to_idx:
             word_to_idx[word] = idx
             idx += 1
-  return word_to_idx
+
+  return word_to_idx, sentences
 
 def run_tests():
   '''
@@ -167,9 +176,17 @@ def main(arguments):
     return run_tests()
 
   train, valid, test, tags = FILE_PATHS[dataset]
+
+  # Dict for POS tags
   build_tag_dict(tags)
-  vocab = get_vocab([train, valid, test])
-  print(len(vocab))
+
+  # Get unique word dictionary and cleaned sentences
+  word_to_idx, sentences = get_vocab([train, valid, test])
+
+  # Convert sentences to input, input_cap, and output windows
+  dwin = 5
+  train_input_word_windows, train_input_cap_windows, train_output = \
+    create_windows_for_sentences(sentences[train])
 
   filename = args.dataset + '.hdf5'
   with h5py.File(filename, "w") as f:
