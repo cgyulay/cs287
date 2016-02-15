@@ -55,7 +55,7 @@ function naive_bayes()
     for p = 1, dwin do
       -- All word/cap occurrences at position p in class y
       local w_sum = word_occurrences[y][p]:sum()
-      local c_sum = word_occurrences[y][p]:sum()
+      local c_sum = cap_occurrences[y][p]:sum()
 
       -- Divide by sum across nwords/ncaps
       word_occurrences:select(1, y):select(1, p):div(w_sum)
@@ -80,8 +80,8 @@ function naive_bayes()
           w = word_window[j]
           c = cap_window[j]
 
-          p_y_hat:mul(word_occurrences[y][j][w])
-          p_y_hat:mul(cap_occurrences[y][j][c])
+          p_y_hat[y] = p_y_hat[y] *  word_occurrences[y][j][w]
+          p_y_hat[y] = p_y_hat[y] *  cap_occurrences[y][j][c]
         end
       end
 
@@ -95,9 +95,9 @@ function naive_bayes()
 
   -- Generate predictions on validation
   local pred = nb_predict(valid_input_word_windows, valid_input_cap_windows)
+
   pred = pred:eq(valid_output):double()
-  print(pred)
-  local accuracy = torch.mean(pred) -- torch.histc(pred,2)[2] / pred:size(1)
+  local accuracy = torch.mean(pred) * 100
 
   print('Validation accuracy: ' .. accuracy .. '.')
 
