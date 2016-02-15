@@ -9,6 +9,7 @@ import argparse
 import sys
 import re
 import codecs
+import math
 
 PADDING = '__PADDING__'
 tag_dict = {}
@@ -40,18 +41,18 @@ def clean_line(line):
     else:
       all_upper = False
 
-  # 0 = all lower
-  # 1 = first char upper
-  # 2 = any other char upper
-  # 3 = all upper
-  case = 0
+  # 1 = all lower
+  # 2 = first char upper
+  # 3 = any other char upper
+  # 4 = all upper
+  case = 1
   if all_upper:
-    case = 3
+    case = 4
   elif any_upper:
     if first_upper:
-      case = 1
-    else:
       case = 2
+    else:
+      case = 3
 
   # Lower
   word = word.lower()
@@ -75,14 +76,33 @@ def clean_line(line):
 
   return word, pos, case
 
-def create_windows_for_sentences(sentences):
+def create_windows_for_sentences(sentences, dwin, word_to_idx):
   '''
   Takes a list of sentences comprised of lists of cleaned words and creates a series of
   windows of length dwin.
   '''
 
+  num_padding = int(math.floor((dwin - 1) / 2))
+  padding = [(PADDING, -1, 1)] * num_padding
+  total_padding = 2 * num_padding
+
+  input_word_windows = []
+  input_cap_windows = []
+  output = []
+
   for s in sentences:
-    # TODO
+    s = padding + s + padding
+    for i in range(len(s) - total_padding):
+      word_window = s[i:i + total_padding + 1]
+
+      # word, pos, case
+      input_word_windows.append([word_to_idx[w[0]] for w in word_window])
+      input_cap_windows.append([w[2] for w in word_window])
+      output.append(word_window[num_padding][1])
+
+  return np.array(input_word_windows, dtype=np.int32), \
+    np.array(input_cap_windows, dtype=np.int32), \
+    np.array(output, dtype=np.int32)
 
 def get_vocab(file_list):
   '''
@@ -95,6 +115,7 @@ def get_vocab(file_list):
   sentences = {}
   sentence = []
   idx = 2 # padding = idx 1
+  word_to_idx[PADDING] = 1
 
   for filename in file_list:
     if filename:
@@ -125,23 +146,23 @@ def run_tests():
 
   # Capitalization
   line = '1 1 Apparently RB'
-  assert clean_line(line) == ('apparently', 17, 1)
-
-  line = '1 1 appaRently RB'
   assert clean_line(line) == ('apparently', 17, 2)
 
-  line = '1 1 APPARENTLY RB'
+  line = '1 1 appaRently RB'
   assert clean_line(line) == ('apparently', 17, 3)
+
+  line = '1 1 APPARENTLY RB'
+  assert clean_line(line) == ('apparently', 17, 4)
   
   # Numbers
   line = '1 1 PS4 NNP'
-  assert clean_line(line) == ('psNUMBER', 1, 1)
+  assert clean_line(line) == ('psNUMBER', 1, 2)
 
   line = '1 1 1.3 CD'
-  assert clean_line(line) == ('NUMBER', 3, 0)
+  assert clean_line(line) == ('NUMBER', 3, 1)
 
   line = '1 1 million CD'
-  assert clean_line(line) == ('million', 3, 0)
+  assert clean_line(line) == ('million', 3, 1)
 
   print('String cleaning tests pass.')
 
@@ -185,20 +206,38 @@ def main(arguments):
 
   # Convert sentences to input, input_cap, and output windows
   dwin = 5
+
   train_input_word_windows, train_input_cap_windows, train_output = \
-    create_windows_for_sentences(sentences[train])
+    create_windows_for_sentences(sentences[train], dwin, word_to_idx)
+
+  valid_input_word_windows, valid_input_cap_windows, valid_output = \
+    create_windows_for_sentences(sentences[valid], dwin, word_to_idx)
+
+  test_input_word_windows, test_input_cap_windows, test_output = \
+    create_windows_for_sentences(sentences[test], dwin, word_to_idx)
+
+  V = len(word_to_idx) + 1
+  print('Vocab size: {0}'.format(V))
+
+  C = np.max(train_output)
 
   filename = args.dataset + '.hdf5'
   with h5py.File(filename, "w") as f:
-    f['train_input'] = train_input
+    f['train_input_word_windows'] = train_input_word_windows
+    f['train_input_cap_windows'] = train_input_cap_windows
     f['train_output'] = train_output
     if valid:
-      f['valid_input'] = valid_input
+      f['valid_input_word_windows'] = valid_input_word_windows
+      f['valid_input_cap_windows'] = valid_input_cap_windows
       f['valid_output'] = valid_output
     if test:
-      f['test_input'] = test_input
-    f['nfeatures'] = np.array([V], dtype=np.int32)
+      f['test_input_word_windows'] = test_input_word_windows
+      f['test_input_cap_windows'] = test_input_cap_windows
+
+    f['nwords'] = np.array([V], dtype=np.int32)
     f['nclasses'] = np.array([C], dtype=np.int32)
+
+    # TODO: word embeddings
 
 
 if __name__ == '__main__':
