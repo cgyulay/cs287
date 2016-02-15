@@ -1,3 +1,9 @@
+# Mac
+*.DS_Store
+
+# hdf5 datasets
+*.hdf5
+
 # Compiled Lua sources
 luac.out
 

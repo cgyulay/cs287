@@ -237,7 +237,8 @@ def main(arguments):
     f['nwords'] = np.array([V], dtype=np.int32)
     f['nclasses'] = np.array([C], dtype=np.int32)
 
-    # TODO: word embeddings
+    # TODO: word embeddings from data/glove.6B.50d.txt.gz
+    f['word_embeddings'] = np.array([0], dtype=np.int32)
 
 
 if __name__ == '__main__':
