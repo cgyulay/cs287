@@ -17,14 +17,41 @@ tag_dict = {}
 
 def clean_line(line):
   '''
-  Extracts word and POS from line.
+  Extracts word, POS, and capitalization information from a line.
+
+  Returns the following tuple: (lowered word, pos, case)
   '''
   info = line.split()
 
   if len(info) == 0:
-    return None, None
+    return None, None, None
 
   word, pos = str(info[2]), str(info[3])
+
+  # Record data regarding capitalization
+  all_upper = True
+  first_upper = False
+  any_upper = False
+  for i, c in enumerate(word):
+    if c.isupper():
+      any_upper = True
+      if i == 0:
+        first_upper = True
+    else:
+      all_upper = False
+
+  # 0 = all lower
+  # 1 = first char upper
+  # 2 = any other char upper
+  # 3 = all upper
+  case = 0
+  if all_upper:
+    case = 3
+  elif any_upper:
+    if first_upper:
+      case = 1
+    else:
+      case = 2
 
   # Lower
   word = word.lower()
@@ -33,9 +60,20 @@ def clean_line(line):
   pos = tag_dict[pos]
 
   # Replace numbers
+  # If the word is a number and can successfully be converted to float,
+  # simply treat it as NUMBER
+  if pos == 3:
+    try:
+      word = float(word)
+      word = 'NUMBER'
+    except ValueError:
+      pass
 
+  # If the word is partially composed of numbers, replace these number
+  # substrings with NUMBER
+  word = re.sub('(\d+)', 'NUMBER', word)
 
-  return word, pos
+  return word, pos, case
 
 def get_vocab(file_list):
   '''
@@ -49,7 +87,7 @@ def get_vocab(file_list):
       with codecs.open(filename, "r", encoding="latin-1") as f:
         print('Extracting vocab from ' + filename + '...')
         for line in f:
-          word, pos = clean_line(line)
+          word, pos, case = clean_line(line)
           if word is None: continue
           if word not in word_counts:
             word_counts[word] = 0
@@ -63,7 +101,7 @@ def get_vocab(file_list):
     if filename:
       with codecs.open(filename, "r", encoding="latin-1") as f:
         for line in f:
-          word, pos = clean_line(line)
+          word, pos, case = clean_line(line)
           if word not in word_to_idx:
             word_to_idx[word] = idx
             idx += 1
@@ -74,23 +112,39 @@ def run_tests():
   Runs a simple set of tests to ensure vocab extraction and cleaning is working
   properly.
   '''
+  # tuple = word, pos, case
 
-  # Case
+  # Capitalization
   line = '1 1 Apparently RB'
-  assert clean_line(line) == ('apparently', 17)
+  assert clean_line(line) == ('apparently', 17, 1)
+
+  line = '1 1 appaRently RB'
+  assert clean_line(line) == ('apparently', 17, 2)
+
+  line = '1 1 APPARENTLY RB'
+  assert clean_line(line) == ('apparently', 17, 3)
   
   # Numbers
   line = '1 1 PS4 NNP'
-  assert clean_line(line) == ('psNUMBER', 1)
+  assert clean_line(line) == ('psNUMBER', 1, 1)
+
+  line = '1 1 1.3 CD'
+  assert clean_line(line) == ('NUMBER', 3, 0)
+
+  line = '1 1 million CD'
+  assert clean_line(line) == ('million', 3, 0)
+
+  print('String cleaning tests pass.')
 
 def build_tag_dict(filename):
+  tag_dict['_'] = -1 # For test file
   with codecs.open(filename, "r", encoding="latin-1") as f:
     for line in f:
       info = line.split()
       abbrev = str(info[0])
       idx = int(info[1])
       tag_dict[abbrev] = idx
-      
+
 
 FILE_PATHS = {"PTB": ("data/train.tags.txt",
             "data/dev.tags.txt",
@@ -115,6 +169,7 @@ def main(arguments):
   train, valid, test, tags = FILE_PATHS[dataset]
   build_tag_dict(tags)
   vocab = get_vocab([train, valid, test])
+  print(len(vocab))
 
   filename = args.dataset + '.hdf5'
   with h5py.File(filename, "w") as f:
