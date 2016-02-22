@@ -2,6 +2,10 @@
 \documentclass[11pt]{article}
 
 \usepackage{common}
+\usepackage{url}
+\usepackage{graphicx}
+\graphicspath{ {images/} }
+
 \title{HW1: Text Classification}
 \author{Alex Saich \\ asaich@college.harvard.edu \and Colton Gyulay \\ cgyulay@college.harvard.edu }
 \begin{document}
@@ -9,162 +13,155 @@
 \maketitle{}
 \section{Introduction}
 
-For the first assignment of \textit{CS287} we are tasked with text classification, specifically within the realm of movie reviews. Our datasets consisted of short strings of words each labeled with a rating in the range $1- 5$. These ratings correspond to each reviewers' sentiment in regard to the film, where lower ratings correspond generally to negative language.
+For the first assignment of CS287 we are tasked with text classification, specifically within the realm of movie reviews. Our primary dataset consisted of short strings of words each labeled with a rating in the range $1- 5$. These ratings correspond to each reviewers' sentiment in regard to the film, where lower ratings correspond generally to negative language.
 
-We utilized three different models to learn the statistical associations between specific vocabulary and sentiment. These include a naive Bayes model \citep{murphy2012machine}, a logistic regression model, and a linear support vector machine \citep{wang2012baselines}. The naive Bayes model learned the underlying class distribution and token distribution within these classes, which was then used to predict ratings on examples. The logistic regression and linear SVM models were trained using mini-batch stochastic gradient descent.
+We utilized three different models to learn the statistical associations between specific vocabulary and sentiment. These include a naive Bayes model \citep{murphy2012machine}, a logistic regression model, and a linear support vector machine \citep{wang2012baselines}. The naive Bayes model learned the underlying class distribution and token distribution within these classes, which was then used to predict ratings on examples. The logistic regression and linear SVM models were trained using mini-batch stochastic gradient descent. We experimented with k-fold cross-validation as an improvement over standard methods.
 
-
-\section{Problem Description}
+\section{Problem Description and Model}
 
 \subsection{Dataset}
 
-Our data initially came in the format of a string of words (for example, "undeniably fascinating and playful fellow") associated with a class \textit{c} in the range $1- 5$. The total set of vocabulary $\mcV$ seen across training examples included around $17000$ words. We converted each example to a vector $\boldx_{\scriptscriptstyle 1\times \mcV}$ where each index represented the number of occurrences of a specific token within that example.
+Our data initially came in the format of a string of words (for example, "undeniably fascinating and playful fellow") associated with a class \textit{y} in the range $1- 5$. The total set of vocabulary $\mcV$ seen across training examples included around $17000$ words. We converted each example to a vector $\boldx_{\scriptscriptstyle 1\times \mcV}$ where each index represented the number of occurrences of a specific token within that example.
 
 \subsection{Naive Bayes}
 
+For the naive Bayes model, we first compiled a prior probability vector $\boldy_{\scriptscriptstyle 1\times y}$ to model $P(y)$. We then built a class-word probability matrix $\boldM_{\scriptscriptstyle y\times \mcV}$ that indicates the probability that a word is associated with a given class; $\boldM$ models $P(x|y)$. To avoid zeroing out probabilities of examples with words not seen in a specific class, we add a smoothing constant $\alpha$ to each occurrence count. By an assumption of independence among words in an individual example and by Bayes' theorem, we can treat the probability that an example belongs to a class as proportional to the product of the individual word probabilities and the prior probability of that class. More formally, $p(y_{\scriptscriptstyle i}|x) \propto  p(y_{\scriptscriptstyle i}) \times p(x|y_{\scriptscriptstyle i})$, where $p(x|y_{\scriptscriptstyle i}) = \prod_{j=1}^{\mcV} p(x_{j}|y_{\scriptscriptstyle j})$ from $\boldM$.
 
-For the naive Bayes model, we first compiled a prior probability matrix $\boldY_{\scriptscriptstyle 1\times c}$ to model $P(c)$. We then built a class-word probability matrix $\boldM_{\scriptscriptstyle c\times \mcV}$ that indicates the probability that a word is associated with a given class. $\boldM$ models $P(x|c)$.
+\subsection{Logistic Regression and Linear SVM}
 
-\subsection{Logistic Regression and $\boldL_{\scriptscriptstyle 2}$ SVM}
+Our logistic regression and Linear SVM models use similar topologies and training methods, though differ in cost and gradient calculation. Both models were trained using mini-batch stochastic gradient descent with mini-batch size \textit{m}. A weight matrix $\boldW_{\scriptscriptstyle \mcV\times y}$ and bias vector $\boldb_{\scriptscriptstyle 1\times y}$ were combined in the form $\boldx\boldW + \boldb = \boldz$ and then passed to a Softmax function to convert scores to a normalized probability distribution $\hat{y}_i$ for each class $y_i$. A model's prediction for any example is given by $argmax_i(p(y_i|x))$.
 
-In general, homeworks will be specified using informal
-language. As part of the assignment, we expect you to write-out a
-definition of the problem and your model in formal language. For this
-class, we will use the following notation:
+The logistic regression model sought to minimize a cross-entropy loss objective for clarity in this formulation, $c$ represents the correct class: $L_{cross-entropy}(\boldy, \hat{\boldy}) = -\sum_{c} \hat{\boldy_c} log(\hat{\boldy_c})$. Gradients for computing $\frac{\partial L(\boldy, \hat{\boldy_i})}{\partial \boldz_i}$ took the following form, which calculates how the loss varies in regard to the Softmax output $\boldz$:
 
-\begin{itemize}
-\item $\boldb, \boldm$;  bold letters for vectors.
-\item $\boldB, \boldM$;  bold capital letters for matrices.
-\item $\mcB, \mcM$;  script-case for sets.
-\item $b_i, x_i$; lower case for scalars or indexing into vectors.
-\end{itemize}
+\[\hat{\boldg} = \left\{
+\begin{array}{ll}
+      -(1 - \hat{\boldy_i}) & i = y \\
+      \hat{\boldy_i} & ow. \\
+\end{array}
+\right. \]
 
+The gradient for $\boldb$ is simply $\hat{\boldg}$, while the gradient for $\boldW$ is given by $\boldx\hat{\boldg}$. The linear SVM model sought to minimize a hinge loss objective (for clarity in this formulation, $c$ represents the correct class and $c^\prime$ the highest scoring \textit{incorrect} class): $L_{hinge}(\boldy, \hat{\boldy}) = max\{0, 1 - (\hat{\boldy_c} - \hat{\boldy_{c^\prime}})\}$ Gradients for computing  $\frac{\partial L(\boldy, \hat{\boldy})}{\partial \hat{\boldy_j}}$ took the following form:
 
-For instance in natural language processing, it is common to use
-discrete sets like $\mcV$ for the vocabulary of the language, or $\mcT$ for a
-tag set of the language.  We might also want one-hot vectors
-representing words. These will be of the type
-$\boldv \in \{0,1\}^{|\mcV|}$. In a note, it is crucial to define the
-types of all variables that are introduced. The problem description is the
-right place to do this.
+\[\hat{\boldg} = \left\{
+\begin{array}{ll}
+      0 & \hat{\boldy_c} - \hat{\boldy_{c^\prime}} > 1 \\
+      1 & j = c^\prime \\
+      -1 & j = c \\
+      0 & ow. \\
+\end{array}
+\right. \]
 
-% NLP is also
-% full of sequences. For instance sentences, $w_1, \ldots, w_N$, where
-% here $N$ is a constant length and $w_i \in \mcV$ for all
-% $i \in \{1, \ldots N\}$. If we pretend sentences are all the same
-% length, we can have scoring function over sentences,
-% $s : \mcV^N \mapsto \reals$.  One might be defined as:
+The gradients for $\boldb$ and $\boldW$ follow the same pattern as described above. For both regressions, we used $L2$ regularization to prevent overfitting with a regularization coefficient represented by $\lambda$. In our gradient descent, we use a learning rate of $\alpha$ that determines how descent step size. The propagation of these gradients is explained further through pseudo-code in the following \textbf{Algorithms} section.
 
-% \[ s(w_1, \ldots, w_N) = \sum_{i = 1}^N p(w_i | w_{i-2}, w_{i-1}), \]
+\section{Algorithms}
 
-% \noindent where $p$ is the bigram probability, which we will cover later in the class.
+The learning using the naive Bayes classifier and the two regressions was done slightly differently. In the case of the naive Bayes, a prior probability of each class' totals was created out of the training data, and then a count matrix for words present in each class. $\boldb$ and $\boldW$ were then normalized to represent probabilities, and new $x$ vectors would be transformed by the weights to find a class distribution. A more in-depth explanation is outlined in pseudo-code below.
 
-\section{Model and Algorithms}
+The regressions were used mini-batch gradient descent. Because our training set was so large, and because regression inherently takes much longer to train than naive Bayes (gradient weights must be calculated at each step rather than just calculating occurrence sums), we would take randomized batches of the training data for learning. While this meant that the chances of training again on the same datapoint were not 0, we found it was the most efficient way of sampling a subset of the dataset that did not sacrifice our performance. For each mini-batch, an aggregated weight gradient matrix and bias gradient term were created and then applied to our $\boldW$ and $\boldb$. Performing descent in batches rather than stochastically was more efficient because it meant that derivatives only needed to be found every $n$ inputs rather than every time.
 
-Here you specify the model itself. This section should formally
-describe the model used to solve the task proposed in the previous
-section. This section should try to avoid introducing new vocabulary
-or notation, when possible use the notation from the previous section.
-Feel free to use the notation from class, but try to make the note
-understandable as a standalone piece of text.
+We also tried running the regression using k-fold cross-validation (not mentioned in pseudo-code below) in order to see if this would yield a more accurate result. We split the group into $k$ groups, iterating through the groups and holding each of them apart as a validation set while the algorithm trained on the other $k-1$ sets. The weights were then averaged across the $k$ iterations to give a model that better represents all the data. Listed below is pseudo-code for our the algorithms that did the heavy lifting: naive Bayes and SGD. We also include code for the cross-entropy and hinge loss objectives.
 
-This section is also a great place to include other material that
-describes the underlying structure and choices of your model, for
-instance here are some example tables and algorithms from full
-research papers:
+\begin{algorithmic}[1]
+  \Procedure{Naive Bayes}{$x_1\ldots x_N$, $y_1\ldots y_N$}
+  \State{$W \gets 0$}
+  \State{$b \gets 0$}
+  \For{$i = 0, \ldots, C$}
+    \State{$b_c \gets \sum_{i=1}^{n}{\frac{\mathbf{1}(\mathbf{y_i} = c)}{n}}$}
+    \State{$F_f \gets \sum_{i=1}^{n}\mathbf{1}(\mathbf{y_i} = c)\mathbf{1}(x_{i,f} = 1)$ for all $f \in F$}
+    \State{$W_c \gets \frac{F_f}{\sum_{f' \in F}{F_{f',c}}} $ for all $f \in F$}
+  \EndFor{}
 
-
-
-\begin{itemize}
-\item diagrams of your model,
-
-  \begin{center}
-    \includegraphics[width=0.4\textwidth]{network}
-  \end{center}
-\item feature tables,
-
-  \begin{center}
-    \begin{tabular}{@{}lll@{}}
-      \toprule
-      &\multicolumn{2}{c}{Mention Features  } \\
-      & Feature & Value Set\\
-      \midrule
-      & Mention Head & $\mcV$ \\
-      & Mention First Word & $\mcV$ \\
-      & Mention Last Word & $\mcV$ \\
-      & Word Preceding Mention & $\mcV$ \\
-      & Word Following Mention & $\mcV$\\
-      & \# Words in Mention & $\{1, 2, \ldots \}$ \\
-      & Mention Type & $\mathcal{T}$ \\
-      \bottomrule
-    \end{tabular}
-  \end{center}
-
-\item pseudo-code,
+  \State{\Return{$W$, $b$}}
+  \EndProcedure{}
+\end{algorithmic}
 
   \begin{algorithmic}[1]
-    \Procedure{Linearize}{$x_1\ldots x_N$, $K$, $g$}
-    \State{$B_0 \gets \langle (\langle \rangle, \{1, \ldots, N\}, 0, \boldh_0, \mathbf{0})  \rangle$}
-    \For{$m = 0, \ldots, M-1$ }
-    \For{$k = 1, \ldots, |B_m|$}
-    \For{$i \in \mcR$}
-    \State{$(y, \mcR, s, \boldh) \gets \mathrm{copy}(B_m^{(k)})$}
-    \For{word $w$ in phrase $x_i$}
-    \State{$y \gets y $ append $w$ }
-    \State{$s \gets s + \log q(w, \boldh) $ }
-    \State{$\boldh \gets \delta(w, \boldh)$}
+    \Procedure{Mini-batch Gradient Descent}{$x_1\ldots x_N$, $y_1\ldots y_N$, $S$, $\alpha$, $\lambda$, $f$}
+    \State{$W \gets 0$}
+    \State{$b \gets 0$}
+    \For{$s = 0, \ldots, S$}
+    
+    \State{$\vec{X}^{\,} = x_s,\ldots,x_{s+\frac{N}{S}}$}
+    \State{$\vec{Y}^{\,} = y_s,\ldots,y_{s+\frac{N}{S}}$}
+    \State{$L_2 = \frac{\lambda}{2} \|W\|^2_2$}
+    \State{$\hat{y} = WX + b$}
+    \If{$f = $ cross entropy}
+    \State{$z = $ $\frac{exp(\hat{y})}{\sum_{c}exp(\hat{y_c})}$}
+    \State{$\frac{\partial L}{\partial z}$ = crossentropy($z$)}
+    \ElsIf{$f$ = hinge}
+    \State{$\frac{\partial L}{\partial y}$ = hinge($\hat{y}$)}
+    \EndIf{}
+    \State{$\frac{\partial L}{\partial b}$ = $\frac{\partial L}{\partial y}$}
+    \State{$\frac{\partial L}{\partial W}$ = $x\frac{\partial L}{\partial y}$}
+    \State{$b \gets b - \alpha(\frac{\partial L}{\partial b} + \lambda b) $ }
+    \State{$W \gets W - \alpha(\frac{\partial L}{\partial W} + \lambda W) $ }
     \EndFor{}
-    \State{$B_{m+|w_i|} \gets B_{m+|w_i|} + (y, \mcR - i, s,   \boldh)$}
-    \State{keep top-$K$ of $B_{m+|w_i|}$ by $f(x, y) + g(\mcR)$}
+    \State{\Return{$W$, $b$}}
+    \EndProcedure{}
+  \end{algorithmic}
+  
+  \begin{algorithmic}[1]
+    \Procedure{Cross Entropy}{$\hat{Y}_{1,\ldots,N}$,
+    $Y_{1,\ldots,N}$}
+    \State{$\frac{\partial L}{\partial y} \gets 0$}
+    \For{$i=0, \ldots, N$}
+    \State{$\frac{\partial L}{\partial z}_{i,c} \gets -(1 - \hat{y}_i)$}
+    \State{$\frac{\partial L}{\partial z}_{i,c'} \gets \hat{y}_i$}
     \EndFor{}
+    \State{\Return{$\frac{\partial L}{\partial y}$}}
+    \EndProcedure{}
+  \end{algorithmic}
+    
+  \begin{algorithmic}[1]
+    \Procedure{Hinge Loss}{$\hat{Y}_{1,\ldots,N}$,
+    $Y_{1,\ldots,N}$}
+    \State{$\frac{\partial L}{\partial y} \gets 0$}
+    \For{$i=0, \ldots, N$}
+    \If{$\hat{Y}_{i,c} - \hat{Y}_{i,c'} > 1$}
+    \State{$\frac{\partial L}{\partial y}_i \gets 0$}
+    \Else{}
+    \State{$\frac{\partial L}{\partial y}_{i,c} \gets -1$}
+    \State{$\frac{\partial L}{\partial y}_{i,c'} \gets 1$}
+    \EndIf{}
     \EndFor{}
-    \EndFor{}
-    \State{\Return{$B_{M}^{(k)}$}}
+    \State{\Return{$\frac{\partial L}{\partial y}$}}
     \EndProcedure{}
   \end{algorithmic}
 
-\end{itemize}
-
-
 \section{Experiments}
 
-Finally we end with the experimental section. Each assignment will make clear the main experiments and baselines that you should run. For these experiments you should present a main results table. Here we give a sample Table~\ref{tab:results}. In addition to these results you should describe in words what the table shows and the relative performance of the models.
-
-Besides the main results we will also ask you to present other results
-comparing particular aspects of the models. For instance, for word
-embedding experiments, we may ask you to show a chart of the projected
-word vectors. This experiment will lead to something like
-Figure~\ref{fig:clusters}. This should also be described within the
-body of the text itself.
-
+We found that our results performed considerably better than a baseline model with no learned weights, confirming that our model was in fact learning on the dataset. Between the three distinct models we did not find a wild divergence, as all three performed reasonably well, though the vanilla logistic regression model might have performed better with further hyperparameter tuning. For its simplicity, the naive Bayes model performed impressively. Regression with at least a few passes over the entire dataset performed comparably. All scores reported in Table 1 are based on validation accuracy.
 
 \begin{table}[h]
 \centering
 \begin{tabular}{llr}
  \toprule
- Model &  & Acc. \\
+ Model & SST1 & SST2 \\
  \midrule
- \textsc{Baseline 1} & & 0.45\\
- \textsc{Baseline 2} & & 2.59 \\
- \textsc{Model 1} & & 10.59  \\
- \textsc{Model 2} & &13.42 \\
- \textsc{Model 3} & & 7.49\\
+ \textsc{Naive Bayes} & 39.9 & 80.1  \\
+ \textsc{Logistic Regression} & 38.44 & 81.2 \\
+ \textsc{Linear SVM} & 40.9 & 77.4 \\
+ \textsc{Logistic with 10-fold CV} & 35.8 & 78.8 \\
  \bottomrule
 \end{tabular}
-\caption{\label{tab:results} Table with the main results.}
+\caption{\label{tab:results} Results on datasets SST1 \& SST2}
 \end{table}
 
+We've also included plots showing training and validation accuracy over epochs for the logistic regression and linear SVM models. These scores are recorded on the SST1 dataset. Epoch 0 represents prediction accuracy prior to any training.
 
-\begin{figure}
-  \centering
-  \includegraphics[width=6cm]{cluster_viz}
-  \caption{\label{fig:clusters} Sample qualitative chart.}
-\end{figure}
+\includegraphics[scale=0.33]{lr_train_sst1}
+\includegraphics[scale=0.33]{lr_valid_sst1} \\
 
+\includegraphics[scale=0.33]{svm_train_sst1}
+\includegraphics[scale=0.33]{svm_valid_sst1}
 
 \section{Conclusion}
 
-End the write-up with a very short recap of the main experiments and the main results. Describe any challenges you may have faced, and what could have been improved in the model.
+Our final resulting accuracy was on par with others in the class in regard to Kaggle submission. Our models vastly outperformed our baseline performance, and we found that we had the most success with cross-entropy logistic regression (although naive Bayes was the fastest). Furthermore, we found pronounced success using k-fold cross-validation to complement the learning in our mini-batch gradient descent.
+
+We encountered problems with our loss functions as well as trying to get our weights to converge. Our SVM loss at times diverged into the hundreds unless a large $L2$ value was set, despite the fact that our accuracy was continually improving. This could point towards overfitting on our training model given how weight accumulation. Given more time we would have liked to resolve this issue in order to keep the weights and loss lower.
+
+Some additional steps that could have been taken include the implementation of bigrams for inputs, which has been shown to produce better performance and more accurate results. The downside of this, however, would have been the drastic increase in vocabulary size ($\|V\|^2$, all possible combinations of words present). Our limited processing power was already struggling with the size of the massive sparse matrices. We would have also liked to have optimized our sparsify function to run without for-loops, as we found that the run-time of the function was limiting the scope of the dataset that could be used at one time. Since we were using mini-batch SGD, however, this problem was actually not too pronounced. In total, we were able to produce fairly effective models without extensive manual feature engineering. The full source code can be found on GitHub: \url{https://github.com/cgyulay/cs287}.
 
 \bibliographystyle{apalike}
 \bibliography{writeup}
