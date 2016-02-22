@@ -95,7 +95,7 @@ def create_windows_for_sentences(sentences, dwin, word_to_idx):
     for i in range(len(s) - total_padding):
       word_window = s[i:i + total_padding + 1]
 
-      # # word, pos, case
+      # word, pos, case
       input_word_windows.append([word_to_idx[w[0]] for w in word_window])
       input_cap_windows.append([w[2] for w in word_window])
 
@@ -103,6 +103,7 @@ def create_windows_for_sentences(sentences, dwin, word_to_idx):
 
       output.append(word_window[num_padding][1])
 
+  # word window, cap window, output
   return np.array(input_word_windows, dtype=np.int32), \
     np.array(input_cap_windows, dtype=np.int32), \
     np.array(output, dtype=np.int32)
@@ -130,7 +131,7 @@ def get_vocab(file_list, vecs_dict):
 
   embeddings.append(random_embedding()) # first line for padding
   # embeddings.append(random_embedding()) # second line for rare words
-  
+
   for filename in file_list:
     if filename:
       with codecs.open(filename, "r", encoding="latin-1") as f:

@@ -133,7 +133,11 @@ function model(structure)
     model:add(par):add(nn.CAddTable()):add(logsoftmax)
 
   elseif structure == 'mlp' then
-    print('Building multilayer perceptron model...')
+    if embed == 'y' then
+      print('Building multilayer perceptron model with pretrained embeddings...')
+    else
+      print('Building multilayer perceptron model...')
+    end
 
     -- Use two parallel sequentials to support LookupTables with Reshape
     -- Word LookupTable
@@ -469,7 +473,6 @@ function main()
 
     return d
   end
-
 
   -- train_input = combine(train_input_word_windows, train_input_cap_windows)
   -- valid_input = combine(valid_input_word_windows, valid_input_cap_windows)
