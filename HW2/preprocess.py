@@ -95,22 +95,61 @@ def create_windows_for_sentences(sentences, dwin, word_to_idx):
     for i in range(len(s) - total_padding):
       word_window = s[i:i + total_padding + 1]
 
-      # word, pos, case
+      # # word, pos, case
       input_word_windows.append([word_to_idx[w[0]] for w in word_window])
       input_cap_windows.append([w[2] for w in word_window])
+
+      # input_word_windows.append([str(word_to_idx[w[0]+":"+str(i-2)]) for i, w in zip(range(0,len(word_window)), word_window)])
+
       output.append(word_window[num_padding][1])
 
   return np.array(input_word_windows, dtype=np.int32), \
     np.array(input_cap_windows, dtype=np.int32), \
     np.array(output, dtype=np.int32)
 
-def get_vocab(file_list):
+def get_vocab(file_list, vecs_dict):
   '''
   Locates top 100k words across dataset and replace rare words with RARE token.
   Reforms word indexes after removing rare words.
   '''
   # NB: there are fewer than 100k unique tokens in train + valid + test
   # (< 40k), so we don't need to create a limited dictionary with RARE tokens
+  word_to_idx = {}
+  sentences = {}
+  sentence = []
+  idx = 3 # padding = idx 1
+  word_to_idx[PADDING] = 1  
+  nembeddings = 50
+  embeddings = []
+  embeddings.append([0]*nembeddings) # first line for padding
+  embeddings.append([0]*nembeddings) # second line for rare words
+
+  for filename in file_list:
+    if filename:
+      with codecs.open(filename, "r", encoding="latin-1") as f:
+        print('Extracting vocab from ' + filename + '...')
+        sentences[filename] = []
+
+        for line in f:
+          word, pos, case = clean_line(line)
+          if word is not None:
+            sentence.append((word, pos, case))
+          else:
+            sentences[filename].append(sentence)
+            sentence = []
+            continue
+          if word not in word_to_idx:
+            try:
+              embeddings.append(vecs_dict[word])
+              word_to_idx[word] = idx
+              idx += 1
+            except:
+              word_to_idx[word] = 2
+              
+
+  return word_to_idx, sentences, embeddings
+
+def vocab_window(file_list, dwin, vecs_dict):
   word_to_idx = {}
   sentences = {}
   sentence = []
@@ -130,12 +169,41 @@ def get_vocab(file_list):
           else:
             sentences[filename].append(sentence)
             sentence = []
-            continue
-          if word not in word_to_idx:
-            word_to_idx[word] = idx
-            idx += 1
 
-  return word_to_idx, sentences
+  num_padding = int(math.floor((dwin - 1) / 2))
+  padding = [(PADDING, -1, 1)] * num_padding
+  total_padding = 2 * num_padding
+
+  input_dict = {}
+  for k, v in sentences.items():
+    input_dict[k] = {}
+    input_word_windows = []
+    input_cap_windows = []
+    output = []
+
+    for s in v:
+      s = padding + s + padding
+      for i in range(len(s) - total_padding):
+        word_window = s[i:i + total_padding + 1]
+
+        for i, w in zip(range(-2, len(word_window)-2), word_window):
+          word = str(w[0])+":"+str(i)
+          if word not in word_to_idx:
+              word_to_idx[word] = idx
+
+              idx += 1
+
+        input_cap_windows.append([w[2] for w in word_window])
+
+        input_word_windows.append([word_to_idx[w[0]+":"+str(i-2)] for i, w in zip(range(0,len(word_window)), word_window)])
+        # print(word_window[num_padding])
+        output.append(word_window[num_padding][1])
+
+    input_dict[k]['word'] = input_word_windows
+    input_dict[k]['cap'] = input_cap_windows
+    input_dict[k]['out'] = output
+  return input_dict, word_to_idx
+
 
 def run_tests():
   '''
@@ -175,11 +243,27 @@ def build_tag_dict(filename):
       idx = int(info[1])
       tag_dict[abbrev] = idx
 
+def build_vector(filename):
+  vector_dict = {}
+
+  with codecs.open(filename, "r", encoding="latin-1") as f:
+    for line in f:
+      try:
+        info = line.split()
+        word = info[0]
+        vec = [float(x) for x in info[1:]]
+      except:
+        continue
+      # print(vec)
+      vector_dict[word] = vec
+
+  return vector_dict 
 
 FILE_PATHS = {"PTB": ("data/train.tags.txt",
             "data/dev.tags.txt",
             "data/test.tags.txt",
-            "data/tags.dict")}
+            "data/tags.dict",
+            "data/glove.6B.50d.txt")}
 args = {}
 
 
@@ -196,15 +280,17 @@ def main(arguments):
     build_tag_dict('data/tags.dict')
     return run_tests()
 
-  train, valid, test, tags = FILE_PATHS[dataset]
+  train, valid, test, tags, embeddings = FILE_PATHS[dataset]
 
   # Dict for POS tags
   build_tag_dict(tags)
 
-  # Get unique word dictionary and cleaned sentences
-  word_to_idx, sentences = get_vocab([train, valid, test])
+  word_vecs = build_vector(embeddings)
 
-  # Convert sentences to input, input_cap, and output windows
+  # Get unique word dictionary and cleaned sentences
+  word_to_idx, sentences, emb_matrix = get_vocab([train, valid, test], word_vecs)
+
+  # # Convert sentences to input, input_cap, and output windows
   dwin = 5
 
   train_input_word_windows, train_input_cap_windows, train_output = \
@@ -215,6 +301,18 @@ def main(arguments):
 
   test_input_word_windows, test_input_cap_windows, test_output = \
     create_windows_for_sentences(sentences[test], dwin, word_to_idx)
+
+  # input_dict, word_to_idx = vocab_window([train, valid, test], dwin, word_vecs)
+
+
+  # train_input_word_windows, train_input_cap_windows, train_output = \
+  #   input_dict[train]['word'],input_dict[train]['cap'],input_dict[train]['out']
+  # print(train_output)
+  # valid_input_word_windows, valid_input_cap_windows, valid_output = \
+  #   input_dict[valid]['word'],input_dict[valid]['cap'],input_dict[valid]['out']
+
+  # test_input_word_windows, test_input_cap_windows, test_output = \
+  #   input_dict[test]['word'],input_dict[test]['cap'],input_dict[test]['out']
 
   V = len(word_to_idx) + 1
   print('Vocab size: {0}'.format(V))
@@ -237,6 +335,7 @@ def main(arguments):
     f['nwords'] = np.array([V], dtype=np.int32)
     f['nclasses'] = np.array([C], dtype=np.int32)
     f['dwin'] = np.array([dwin], dtype=np.int32)
+    f['matrix'] = np.array(emb_matrix)
 
     # TODO: word embeddings from data/glove.6B.50d.txt.gz
     f['word_embeddings'] = np.array([0], dtype=np.int32)
