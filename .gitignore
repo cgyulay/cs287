@@ -4,6 +4,8 @@
 # hdf5 datasets
 *.hdf5
 
+/training_output
+
 # Compiled Lua sources
 luac.out
 
