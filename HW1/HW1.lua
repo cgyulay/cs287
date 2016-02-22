@@ -221,7 +221,7 @@ function kfolds_logistic(loss_fn, k)
         print("  Current Fold: " .. j+1 .. "/" ..k)
         for k = 0, n_train_batches do
           local batch_start = torch.random(i*subset_size+1, (i+1)*subset_size)
-          local batch_end = math.min((batch_start + batch_size - 1), order:size(1)) 
+          local batch_end = math.min((batch_start + batch_size - 1), order:size(1))
 
           -- print(batch_start .." - " .. batch_end)
           batch = torch.Tensor(order[{{batch_start,batch_end}}])
