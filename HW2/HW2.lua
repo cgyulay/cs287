@@ -114,28 +114,21 @@ function model(structure)
   local dout = nclasses
 
   local model = nn.Sequential()
-  -- :cuda()
 
   if structure == 'lr' then
     print('Building logistic regression model...')
 
     local sparseW_word = nn.LookupTable(nwords, nclasses)
-    -- :cuda()
     local W_word = nn.Sequential():add(sparseW_word):add(nn.Sum(2))
-    -- :cuda()
 
     local sparseW_cap = nn.LookupTable(ncaps, nclasses)
-    -- :cuda()
     local W_cap = nn.Sequential():add(sparseW_cap):add(nn.Sum(2))
-    -- :cuda()
     
     local par = nn.ParallelTable()
-    -- :cuda()
     par:add(W_word) -- first child
     par:add(W_cap) -- second child
 
     local logsoftmax = nn.LogSoftMax()
-    -- :cuda()
 
     model:add(par):add(nn.CAddTable()):add(logsoftmax)
 
@@ -145,18 +138,11 @@ function model(structure)
     -- Use two parallel sequentials to support LookupTables with Reshape
     -- Word LookupTable
     local word_lookup = nn.Sequential()
-    if embed == 'y' then
-      w = nn.LookupTable(nwords, embedding_size) -- Pretrained embed init
-
+    local w = nn.LookupTable(nwords, embedding_size)
+    if embed == 'y' then -- Pretrained embed init
       for i = 1, nwords do
         w.weight[{i}] = embeddings[{i}]
-
       end
-      -- print(w.weight:size())
-      -- print(nwords)
-    elseif embed == 'n' then
-      w = nn.LookupTable(nwords, embedding_size)
-      print(w.weight:size()) -- Random embed init (types x embedding size)
     end
 
     local w_reshape = nn.Reshape(dwin * embedding_size)
@@ -176,6 +162,8 @@ function model(structure)
 
     model:add(nn.Linear(din, dhid))
     model:add(nn.HardTanh())
+    -- model:add(nn.ReLU())
+    -- model:add(nn.Dropout(0.5))
     model:add(nn.Linear(dhid, dout))
     model:add(nn.LogSoftMax())
   else
@@ -246,11 +234,13 @@ function model(structure)
       options = {
         learningRate = eta,
         learningRateDecay = 0.0001
+        -- alpha = 0.95 -- For rmsprop
         -- momentum = 0.5
       }
 
       -- Use optim package for minibatch sgd
       optim.sgd(run_minibatch, params, options)
+      -- optim.rmsprop(run_minibatch, params, options) -- Slower
     end
   end
 
@@ -297,7 +287,7 @@ function model(structure)
   end
 
   print('Writing to file...\n')
-  local f = torch.DiskFile('training_output/mlptest_dhid=' .. dhid .. '.txt', 'w')
+  local f = torch.DiskFile('training_output/mlptest_pretrainedembed_relu_dhid=' .. dhid .. '.txt', 'w')
   f:seekEnd()
   f:writeString('\nMLP hyperparams: eta=' .. eta .. ', dhid=' .. dhid .. ', dwin=' .. dwin .. ', pretrainedembed=no')
   f:writeString('\nValid Acc, Train Acc, Valid Loss, Train Loss, Time\n')
@@ -490,9 +480,10 @@ function main()
     naive_bayes()
   else
 
-    dhid = 300
+    -- dhid = 300
     local dhids = {
-      300
+      300,
+      400
     }
 
     for k,v in pairs(dhids) do
