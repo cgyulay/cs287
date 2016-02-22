@@ -117,12 +117,19 @@ def get_vocab(file_list, vecs_dict):
   word_to_idx = {}
   sentences = {}
   sentence = []
-  idx = 3 # padding = idx 1
-  word_to_idx[PADDING] = 1  
+  idx = 3 # padding = 1, rare = 2
+  word_to_idx[PADDING] = 1
+
+  # Store dense word embeddings
   nembeddings = 50
   embeddings = []
-  embeddings.append([0]*nembeddings) # first line for padding
-  embeddings.append([0]*nembeddings) # second line for rare words
+
+  # Initialize rare words not seen in corpus to small random weights
+  def random_embedding():
+    return np.array(np.random.randn((nembeddings)) * 0.1)
+
+  embeddings.append(random_embedding()) # first line for padding
+  embeddings.append(random_embedding()) # second line for rare words
 
   for filename in file_list:
     if filename:
@@ -138,13 +145,17 @@ def get_vocab(file_list, vecs_dict):
             sentences[filename].append(sentence)
             sentence = []
             continue
+
+          # Format pretrained embeddings
           if word not in word_to_idx:
             try:
               embeddings.append(vecs_dict[word])
               word_to_idx[word] = idx
               idx += 1
             except:
-              word_to_idx[word] = 2
+              embeddings.append(random_embedding())
+              word_to_idx[word] = idx
+              idx += 1
               
 
   return word_to_idx, sentences, embeddings

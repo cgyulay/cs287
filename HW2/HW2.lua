@@ -2,6 +2,7 @@
 require("hdf5")
 require("nn")
 require("optim")
+require("gnuplot")
 
 cmd = torch.CmdLine()
 
@@ -11,7 +12,7 @@ cmd:option('-classifier', 'nb', 'classifier to use')
 cmd:option('-alpha', 1.0, 'Laplace smoothing coefficient')
 cmd:option('-eta', 0.01, 'learning rate')
 cmd:option('-lambda', 0.05, 'l2 regularization coefficient')
-cmd:option('-n_epochs', 3, 'number of training epochs')
+cmd:option('-n_epochs', 15, 'number of training epochs')
 cmd:option('-m', 32, 'minibatch size')
 
 function naive_bayes()
@@ -109,7 +110,6 @@ function model(structure)
   local embedding_size = 50
   local din = dwin * (embedding_size + ncaps)
   local dout = nclasses
-  local dhid = 200
 
   local model = nn.Sequential()
 
@@ -136,6 +136,7 @@ function model(structure)
     -- Word LookupTable
     local word_lookup = nn.Sequential()
     local w = nn.LookupTable(nwords, embedding_size) -- Random embed init (types x embedding size)
+    -- local w = nn.LookupTable(embed) -- Pretrained embed init
     local w_reshape = nn.Reshape(dwin * embedding_size)
     word_lookup:add(w):add(w_reshape)
 
@@ -161,23 +162,21 @@ function model(structure)
   end
 
   local nll = nn.ClassNLLCriterion()
-  nll.sizeAverage = false
+  -- nll.sizeAverage = false
 
   local params, gradParams = model:getParameters()
 
   function train(e)
     -- Package selected dataset into minibatches
-    local selected_x_ww = valid_input_word_windows
-    local selected_x_cw = valid_input_cap_windows
-    local selected_y = valid_output
+    local selected_x_ww = train_input_word_windows
+    local selected_x_cw = train_input_cap_windows
+    local selected_y = train_output
     local n_train_batches = math.floor(selected_x_ww:size(1) / batch_size) - 1
 
     print('\nBeginning epoch ' .. e .. ' training: ' .. n_train_batches .. ' minibatches of size ' .. batch_size .. '.')
     for i = 1, n_train_batches do
-      -- local input = torch.DoubleTensor(batch_size, dwin)
-      -- local output = torch.IntTensor(batch_size)
-      -- local batch_start = torch.random(1, selected_x:size(1) - batch_size)
-      local batch_start = (i - 1) * batch_size + 1
+      local batch_start = torch.random(1, selected_x_ww:size(1) - batch_size)
+      -- local batch_start = (i - 1) * batch_size + 1
       local batch_end = batch_start + batch_size - 1
 
       local range = torch.range(batch_start, batch_end):long()
@@ -211,7 +210,9 @@ function model(structure)
       end
 
       options = {
-        learningRate = eta
+        learningRate = eta,
+        learningRateDecay = 0.0001
+        -- momentum = 0.5
       }
 
       -- Use optim package for minibatch sgd
@@ -221,10 +222,11 @@ function model(structure)
 
   function test(x_ww, x_cw, y)
     local preds = model:forward({x_ww, x_cw})
+    local loss = nll:forward(preds, y)
     local max, yhat = preds:max(2)
     
-    local correct = yhat:int():eq(y):double()
-    return torch.mean(correct) * 100
+    local correct = yhat:int():eq(y):double():mean() * 100
+    return correct, loss
   end
 
   function valid_acc()
@@ -237,12 +239,38 @@ function model(structure)
 
   print('Validation accuracy before training: ' .. valid_acc() .. ' %.')
   print('Beginning training...')
+  local vloss = torch.DoubleTensor(n_epochs) -- valid/train loss/accuracy/time
+  local tloss = torch.DoubleTensor(n_epochs)
+  local vacc = torch.DoubleTensor(n_epochs)
+  local tacc = torch.DoubleTensor(n_epochs)
+  local etime = torch.DoubleTensor(n_epochs)
   for i = 1, n_epochs do
     local timer = torch.Timer()
     train(i)
+
+    local va, vl = valid_acc()
+    local ta, tl = train_acc()
+
+    vloss[i] = vl
+    tloss[i] = tl
+    vacc[i] = va
+    tacc[i] = ta
+    etime[i] = timer:time().real
+
     print('Epoch ' .. i .. ' training completed in ' .. timer:time().real .. ' seconds.')
-    print('Validation accuracy after epoch ' .. i .. ': ' .. valid_acc() .. ' %.')
+    print('Validation accuracy after epoch ' .. i .. ': ' .. va .. ' %.')
   end
+
+  print('Writing to file...\n')
+  local f = torch.DiskFile('training_output/mlptest_dhid=' .. dhid .. '.txt', 'w')
+  f:seekEnd()
+  f:writeString('\nMLP hyperparams: eta=' .. eta .. ', dhid=' .. dhid .. ', dwin=' .. dwin .. ', pretrainedembed=no')
+  f:writeString('\nValid Acc, Train Acc, Valid Loss, Train Loss, Time\n')
+
+  for i = 1, n_epochs do
+    f:writeString(vacc[i] .. ',' .. tacc[i] .. ',' .. vloss[i] .. ','  .. tloss[i] .. ','  .. etime[i] .. '\n')
+  end
+  f:close()
 end
 
 function main() 
@@ -274,6 +302,7 @@ function main()
   nclasses = f:read('nclasses'):all():long()[1]
   dwin = f:read('dwin'):all():long()[1]
   ncaps = train_input_cap_windows:max()
+  embed = f:read('matrix'):all()
 
   function combine(ww, cw)
     -- Concat word and cap windows into single tensor
@@ -298,8 +327,29 @@ function main()
   if opt.classifier == 'nb' then
     naive_bayes()
   else
-    model(opt.classifier)
+
+    dhid = 300
+    local dhids = {
+      500
+    }
+
+    for k,v in pairs(dhids) do
+      print('dhid = ' .. v)
+      dhid = v
+      model(opt.classifier)
+    end
   end
 end
 
 main()
+
+-- Plotting
+function plot(data, title, xlabel, ylabel, filename)
+  -- NB: requires gnuplot
+  gnuplot.pngfigure(filename .. '.png')
+  gnuplot.plot(data)
+  gnuplot.title(title)
+  gnuplot.xlabel(xlabel)
+  gnuplot.ylabel(ylabel)
+  gnuplot.plotflush()
+end
