@@ -3,7 +3,8 @@ require("hdf5")
 require("nn")
 require("optim")
 require("gnuplot")
-require("cutorch")
+-- require("cutorch")
+
 cmd = torch.CmdLine()
 
 -- Cmd Args
@@ -12,8 +13,9 @@ cmd:option('-classifier', 'nb', 'classifier to use')
 cmd:option('-alpha', 1.0, 'Laplace smoothing coefficient')
 cmd:option('-eta', 0.01, 'learning rate')
 cmd:option('-lambda', 0.05, 'l2 regularization coefficient')
-cmd:option('-n_epochs', 3, 'number of training epochs')
+cmd:option('-n_epochs', 15, 'number of training epochs')
 cmd:option('-m', 32, 'minibatch size')
+cmd:option('-embed', 'n', 'word embeddings')
 
 function naive_bayes()
   print('Building naive bayes model...')
@@ -110,7 +112,6 @@ function model(structure)
   local embedding_size = 50
   local din = dwin * (embedding_size + ncaps)
   local dout = nclasses
-  local dhid = 200
 
   local model = nn.Sequential()
   -- :cuda()
@@ -133,7 +134,8 @@ function model(structure)
     par:add(W_word) -- first child
     par:add(W_cap) -- second child
 
-    local logsoftmax = nn.LogSoftMax():cuda()
+    local logsoftmax = nn.LogSoftMax()
+    -- :cuda()
 
     model:add(par):add(nn.CAddTable()):add(logsoftmax)
 
@@ -143,7 +145,20 @@ function model(structure)
     -- Use two parallel sequentials to support LookupTables with Reshape
     -- Word LookupTable
     local word_lookup = nn.Sequential()
-    local w = nn.LookupTable(nwords, embedding_size) -- Random embed init (types x embedding size)
+    if embed == 'y' then
+      w = nn.LookupTable(nwords, embedding_size) -- Pretrained embed init
+
+      for i = 1, nwords do
+        w.weight[{i}] = embeddings[{i}]
+
+      end
+      -- print(w.weight:size())
+      -- print(nwords)
+    elseif embed == 'n' then
+      w = nn.LookupTable(nwords, embedding_size)
+      print(w.weight:size()) -- Random embed init (types x embedding size)
+    end
+
     local w_reshape = nn.Reshape(dwin * embedding_size)
     word_lookup:add(w):add(w_reshape)
 
@@ -169,7 +184,7 @@ function model(structure)
   end
 
   local nll = nn.ClassNLLCriterion()
-  nll.sizeAverage = false
+  -- nll.sizeAverage = false
 
   local params, gradParams = model:getParameters()
 
@@ -177,21 +192,29 @@ function model(structure)
 
   function train(e)
     -- Package selected dataset into minibatches
-    local selected_x_ww = valid_input_word_windows
-    local selected_x_cw = valid_input_cap_windows
-    local selected_y = valid_output
+    local selected_x_ww = train_input_word_windows
+    local selected_x_cw = train_input_cap_windows
+    local selected_y = train_output
     local n_train_batches = math.floor(selected_x_ww:size(1) / batch_size) - 1
+
+    -- word_order = torch.randperm(selected_x_ww)
+    -- subsets = torch.range(1,order:size(1)-subset_size, subset_size)
 
     print('\nBeginning epoch ' .. e .. ' training: ' .. n_train_batches .. ' minibatches of size ' .. batch_size .. '.')
     for i = 1, n_train_batches do
-      -- local input = torch.DoubleTensor(batch_size, dwin)
-      -- local output = torch.IntTensor(batch_size)
-      -- local batch_start = torch.random(1, selected_x:size(1) - batch_size)
-      local batch_start = (i - 1) * batch_size + 1
+
+      -- local batch_start = torch.random(i*subset_size+1, (i+1)*subset_size)
+      -- local batch_end = math.min((batch_start + batch_size - 1), order:size(1))
+      -- --     -- print(batch_start .." - " .. batch_end)
+      -- batch = torch.Tensor(order[{{batch_start,batch_end}}])
+
+      local batch_start = torch.random(1, selected_x_ww:size(1) - batch_size)
+      -- local batch_start = (i - 1) * batch_size + 1
       local batch_end = batch_start + batch_size - 1
 
       local range = torch.range(batch_start, batch_end):long()
       local x_ww = selected_x_ww:index(1, range)
+
       local x_cw = selected_x_cw:index(1, range)
       local y = selected_y:index(1, range)
 
@@ -221,7 +244,9 @@ function model(structure)
       end
 
       options = {
-        learningRate = eta
+        learningRate = eta,
+        learningRateDecay = 0.0001
+        -- momentum = 0.5
       }
 
       -- Use optim package for minibatch sgd
@@ -231,10 +256,11 @@ function model(structure)
 
   function test(x_ww, x_cw, y)
     local preds = model:forward({x_ww, x_cw})
+    local loss = nll:forward(preds, y)
     local max, yhat = preds:max(2)
     
-    local correct = yhat:int():eq(y):double()
-    return torch.mean(correct) * 100
+    local correct = yhat:int():eq(y):double():mean() * 100
+    return correct, loss
   end
 
   function valid_acc()
@@ -247,22 +273,156 @@ function model(structure)
 
   print('Validation accuracy before training: ' .. valid_acc() .. ' %.')
   print('Beginning training...')
+  local vloss = torch.DoubleTensor(n_epochs) -- valid/train loss/accuracy/time
+  local tloss = torch.DoubleTensor(n_epochs)
+  local vacc = torch.DoubleTensor(n_epochs)
+  local tacc = torch.DoubleTensor(n_epochs)
+  local etime = torch.DoubleTensor(n_epochs)
+  
   for i = 1, n_epochs do
     local timer = torch.Timer()
     train(i)
+
+    local va, vl = valid_acc()
+    local ta, tl = train_acc()
+
+    vloss[i] = vl
+    tloss[i] = tl
+    vacc[i] = va
+    tacc[i] = ta
+    etime[i] = timer:time().real
+
     print('Epoch ' .. i .. ' training completed in ' .. timer:time().real .. ' seconds.')
-    print('Validation accuracy after epoch ' .. i .. ': ' .. valid_acc() .. ' %.')
-    accuracy[i] = valid_acc
+    print('Validation accuracy after epoch ' .. i .. ': ' .. va .. ' %.')
   end
 
-  table.save(accuracy, 'output.txt')
-  plot(train_plot_data, 'Linear SVM Training Accuracy', 'Epochs', 'Accuracy', 'train')
-  plot(valid_plot_data, 'Linear SVM Validation Accuracy', 'Epochs', 'Accuracy', 'valid')
+  print('Writing to file...\n')
+  local f = torch.DiskFile('training_output/mlptest_dhid=' .. dhid .. '.txt', 'w')
+  f:seekEnd()
+  f:writeString('\nMLP hyperparams: eta=' .. eta .. ', dhid=' .. dhid .. ', dwin=' .. dwin .. ', pretrainedembed=no')
+  f:writeString('\nValid Acc, Train Acc, Valid Loss, Train Loss, Time\n')
+
+  for i = 1, n_epochs do
+    f:writeString(vacc[i] .. ',' .. tacc[i] .. ',' .. vloss[i] .. ','  .. tloss[i] .. ','  .. etime[i] .. '\n')
+  end
+  f:close()
 end
 
+--     print('Validation accuracy after epoch ' .. i .. ': ' .. valid_acc() .. ' %.')
+--     accuracy[i] = valid_acc
+--   end
+
+--   table.save(accuracy, 'output.txt')
+--   plot(train_plot_data, 'Linear SVM Training Accuracy', 'Epochs', 'Accuracy', 'train')
+--   plot(valid_plot_data, 'Linear SVM Validation Accuracy', 'Epochs', 'Accuracy', 'valid')
+-- end
+
+-- -- declare local variables
+-- --// exportstring( string )
+-- --// returns a "Lua" portable version of the string
+-- local function exportstring( s )
+--   return string.format("%q", s)
+-- end
+
+-- --// The Save Function
+-- function table.save(  tbl,filename )
+--   local charS,charE = "   ","\n"
+--   local file,err = io.open( filename, "wb" )
+--   if err then return err end
+
+--   -- initiate variables for save procedure
+--   local tables,lookup = { tbl },{ [tbl] = 1 }
+--   file:write( "return {"..charE )
+
+--   for idx,t in ipairs( tables ) do
+--      file:write( "-- Table: {"..idx.."}"..charE )
+--      file:write( "{"..charE )
+--      local thandled = {}
+
+--      for i,v in ipairs( t ) do
+--         thandled[i] = true
+--         local stype = type( v )
+--         -- only handle value
+--         if stype == "table" then
+--            if not lookup[v] then
+--               table.insert( tables, v )
+--               lookup[v] = #tables
+--            end
+--            file:write( charS.."{"..lookup[v].."},"..charE )
+--         elseif stype == "string" then
+--            file:write(  charS..exportstring( v )..","..charE )
+--         elseif stype == "number" then
+--            file:write(  charS..tostring( v )..","..charE )
+--         end
+--      end
+
+--      for i,v in pairs( t ) do
+--         -- escape handled values
+--         if (not thandled[i]) then
+        
+--            local str = ""
+--            local stype = type( i )
+--            -- handle index
+--            if stype == "table" then
+--               if not lookup[i] then
+--                  table.insert( tables,i )
+--                  lookup[i] = #tables
+--               end
+--               str = charS.."[{"..lookup[i].."}]="
+--            elseif stype == "string" then
+--               str = charS.."["..exportstring( i ).."]="
+--            elseif stype == "number" then
+--               str = charS.."["..tostring( i ).."]="
+--            end
+        
+--            if str ~= "" then
+--               stype = type( v )
+--               -- handle value
+--               if stype == "table" then
+--                  if not lookup[v] then
+--                     table.insert( tables,v )
+--                     lookup[v] = #tables
+--                  end
+--                  file:write( str.."{"..lookup[v].."},"..charE )
+--               elseif stype == "string" then
+--                  file:write( str..exportstring( v )..","..charE )
+--               elseif stype == "number" then
+--                  file:write( str..tostring( v )..","..charE )
+--               end
+--            end
+--         end
+--      end
+--      file:write( "},"..charE )
+--   end
+--   file:write( "}" )
+--   file:close()
+-- end
+
+-- --// The Load Function
+-- function table.load( sfile )
+--   local ftables,err = loadfile( sfile )
+--   if err then return _,err end
+--   local tables = ftables()
+--   for idx = 1,#tables do
+--      local tolinki = {}
+--      for i,v in pairs( tables[idx] ) do
+--         if type( v ) == "table" then
+--            tables[idx][i] = tables[v[1]]
+--         end
+--         if type( i ) == "table" and tables[i[1]] then
+--            table.insert( tolinki,{ i,tables[i[1]] } )
+--         end
+--      end
+--      -- link indices
+--      for _,v in ipairs( tolinki ) do
+--         tables[idx][v[2]],tables[idx][v[1]] =  tables[idx][v[1]],nil
+--      end
+--   end
+--   return tables[1]
+
+-- Plotting
 function plot(data, title, xlabel, ylabel, filename)
   -- NB: requires gnuplot
-  -- gnuplot.raw('set xtics (0, 1, 2, 3, 4, 5)')
   gnuplot.pngfigure(filename .. '.png')
   gnuplot.plot(data)
   gnuplot.title(title)
@@ -270,111 +430,6 @@ function plot(data, title, xlabel, ylabel, filename)
   gnuplot.ylabel(ylabel)
   gnuplot.plotflush()
 end
-
--- declare local variables
---// exportstring( string )
---// returns a "Lua" portable version of the string
-local function exportstring( s )
-  return string.format("%q", s)
-end
-
---// The Save Function
-function table.save(  tbl,filename )
-  local charS,charE = "   ","\n"
-  local file,err = io.open( filename, "wb" )
-  if err then return err end
-
-  -- initiate variables for save procedure
-  local tables,lookup = { tbl },{ [tbl] = 1 }
-  file:write( "return {"..charE )
-
-  for idx,t in ipairs( tables ) do
-     file:write( "-- Table: {"..idx.."}"..charE )
-     file:write( "{"..charE )
-     local thandled = {}
-
-     for i,v in ipairs( t ) do
-        thandled[i] = true
-        local stype = type( v )
-        -- only handle value
-        if stype == "table" then
-           if not lookup[v] then
-              table.insert( tables, v )
-              lookup[v] = #tables
-           end
-           file:write( charS.."{"..lookup[v].."},"..charE )
-        elseif stype == "string" then
-           file:write(  charS..exportstring( v )..","..charE )
-        elseif stype == "number" then
-           file:write(  charS..tostring( v )..","..charE )
-        end
-     end
-
-     for i,v in pairs( t ) do
-        -- escape handled values
-        if (not thandled[i]) then
-        
-           local str = ""
-           local stype = type( i )
-           -- handle index
-           if stype == "table" then
-              if not lookup[i] then
-                 table.insert( tables,i )
-                 lookup[i] = #tables
-              end
-              str = charS.."[{"..lookup[i].."}]="
-           elseif stype == "string" then
-              str = charS.."["..exportstring( i ).."]="
-           elseif stype == "number" then
-              str = charS.."["..tostring( i ).."]="
-           end
-        
-           if str ~= "" then
-              stype = type( v )
-              -- handle value
-              if stype == "table" then
-                 if not lookup[v] then
-                    table.insert( tables,v )
-                    lookup[v] = #tables
-                 end
-                 file:write( str.."{"..lookup[v].."},"..charE )
-              elseif stype == "string" then
-                 file:write( str..exportstring( v )..","..charE )
-              elseif stype == "number" then
-                 file:write( str..tostring( v )..","..charE )
-              end
-           end
-        end
-     end
-     file:write( "},"..charE )
-  end
-  file:write( "}" )
-  file:close()
-end
-
---// The Load Function
-function table.load( sfile )
-  local ftables,err = loadfile( sfile )
-  if err then return _,err end
-  local tables = ftables()
-  for idx = 1,#tables do
-     local tolinki = {}
-     for i,v in pairs( tables[idx] ) do
-        if type( v ) == "table" then
-           tables[idx][i] = tables[v[1]]
-        end
-        if type( i ) == "table" and tables[i[1]] then
-           table.insert( tolinki,{ i,tables[i[1]] } )
-        end
-     end
-     -- link indices
-     for _,v in ipairs( tolinki ) do
-        tables[idx][v[2]],tables[idx][v[1]] =  tables[idx][v[1]],nil
-     end
-  end
-  return tables[1]
-end
-
 
 function main() 
   -- Parse input params
@@ -385,6 +440,7 @@ function main()
   lambda = opt.lambda
   n_epochs = opt.n_epochs
   batch_size = opt.m
+  embed = opt.embed
 
   local f = hdf5.open(opt.datafile, 'r')
 
@@ -405,6 +461,9 @@ function main()
   nclasses = f:read('nclasses'):all():long()[1]
   dwin = f:read('dwin'):all():long()[1]
   ncaps = train_input_cap_windows:max()
+  embeddings = f:read('matrix'):all()
+
+  -- vectors = f:read['vector_dict']
 
   function combine(ww, cw)
     -- Concat word and cap windows into single tensor
@@ -430,8 +489,19 @@ function main()
   if opt.classifier == 'nb' then
     naive_bayes()
   else
-    model(opt.classifier)
+
+    dhid = 300
+    local dhids = {
+      300
+    }
+
+    for k,v in pairs(dhids) do
+      print('dhid = ' .. v)
+      dhid = v
+      model(opt.classifier)
+    end
   end
 end
 
 main()
+

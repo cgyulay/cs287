@@ -117,13 +117,20 @@ def get_vocab(file_list, vecs_dict):
   word_to_idx = {}
   sentences = {}
   sentence = []
-  idx = 3 # padding = idx 1
-  word_to_idx[PADDING] = 1  
+  idx = 2 # padding = 1, rare = 2
+  word_to_idx[PADDING] = 1
+
+  # Store dense word embeddings
   nembeddings = 50
   embeddings = []
-  embeddings.append([0]*nembeddings) # first line for padding
-  embeddings.append([0]*nembeddings) # second line for rare words
 
+  # Initialize rare words not seen in corpus to small random weights
+  def random_embedding():
+    return np.array(np.random.randn((nembeddings)) * 0.1)
+
+  embeddings.append(random_embedding()) # first line for padding
+
+  # embeddings.append(random_embedding()) # second line for rare words
   for filename in file_list:
     if filename:
       with codecs.open(filename, "r", encoding="latin-1") as f:
@@ -138,71 +145,85 @@ def get_vocab(file_list, vecs_dict):
             sentences[filename].append(sentence)
             sentence = []
             continue
+
+          # Format pretrained embeddings
           if word not in word_to_idx:
-            try:
+            # print("Current Word: "+str(word))
+            if word in vecs_dict:
               embeddings.append(vecs_dict[word])
               word_to_idx[word] = idx
               idx += 1
-            except:
-              word_to_idx[word] = 2
-              
+              # assert(embeddings[word_to_idx[word]] == vecs_dict[word])
+            else:
+              embeddings.append(random_embedding())
+              word_to_idx[word] = idx
+              idx += 1
+
+  print("Testing Correctness of Word Embeddings...")
+  for word,idx in word_to_idx.items():
+    try:
+      vec = embeddings[idx-1]
+      assert(vec == vecs_dict[word])
+    except:
+      # print("Rare word: "+ str(word))
+      assert(word not in vecs_dict)
 
   return word_to_idx, sentences, embeddings
 
-def vocab_window(file_list, dwin, vecs_dict):
-  word_to_idx = {}
-  sentences = {}
-  sentence = []
-  idx = 2 # padding = idx 1
-  word_to_idx[PADDING] = 1
+# def vocab_window(file_list, dwin, vecs_dict):
+#   word_to_idx = {}
+#   sentences = {}
+#   sentence = []
+#   idx = 2 # padding = idx 1
+#   word_to_idx[PADDING] = 1
 
-  for filename in file_list:
-    if filename:
-      with codecs.open(filename, "r", encoding="latin-1") as f:
-        print('Extracting vocab from ' + filename + '...')
-        sentences[filename] = []
+#   for filename in file_list:
+#     if filename:
+#       with codecs.open(filename, "r", encoding="latin-1") as f:
+#         print('Extracting vocab from ' + filename + '...')
+#         sentences[filename] = []
 
-        for line in f:
-          word, pos, case = clean_line(line)
-          if word is not None:
-            sentence.append((word, pos, case))
-          else:
-            sentences[filename].append(sentence)
-            sentence = []
+#         for line in f:
+#           word, pos, case = clean_line(line)
+#           if word is not None:
+#             sentence.append((word, pos, case))
+#           else:
+#             sentences[filename].append(sentence)
+#             sentence = []
 
-  num_padding = int(math.floor((dwin - 1) / 2))
-  padding = [(PADDING, -1, 1)] * num_padding
-  total_padding = 2 * num_padding
+#   num_padding = int(math.floor((dwin - 1) / 2))
+#   padding = [(PADDING, -1, 1)] * num_padding
+#   total_padding = 2 * num_padding
 
-  input_dict = {}
-  for k, v in sentences.items():
-    input_dict[k] = {}
-    input_word_windows = []
-    input_cap_windows = []
-    output = []
+#   input_dict = {}
+#   for k, v in sentences.items():
+#     input_dict[k] = {}
+#     input_word_windows = []
+#     input_cap_windows = []
+#     output = []
 
-    for s in v:
-      s = padding + s + padding
-      for i in range(len(s) - total_padding):
-        word_window = s[i:i + total_padding + 1]
+#     for s in v:
+#       s = padding + s + padding
+#       for i in range(len(s) - total_padding):
+#         word_window = s[i:i + total_padding + 1]
 
-        for i, w in zip(range(-2, len(word_window)-2), word_window):
-          word = str(w[0])+":"+str(i)
-          if word not in word_to_idx:
-              word_to_idx[word] = idx
+#         for i, w in zip(range(-2, len(word_window)-2), word_window):
+#           word = str(w[0])+":"+str(i)
+#           if word not in word_to_idx:
+#               word_to_idx[word] = idx
 
-              idx += 1
+#               idx += 1
 
-        input_cap_windows.append([w[2] for w in word_window])
+#         input_cap_windows.append([w[2] for w in word_window])
 
-        input_word_windows.append([word_to_idx[w[0]+":"+str(i-2)] for i, w in zip(range(0,len(word_window)), word_window)])
-        # print(word_window[num_padding])
-        output.append(word_window[num_padding][1])
+#         input_word_windows.append([word_to_idx[w[0]+":"+str(i-2)] for i, w in zip(range(0,len(word_window)), word_window)])
+#         # print(word_window[num_padding])
+#         output.append(word_window[num_padding][1])
 
-    input_dict[k]['word'] = input_word_windows
-    input_dict[k]['cap'] = input_cap_windows
-    input_dict[k]['out'] = output
-  return input_dict, word_to_idx
+#     input_dict[k]['word'] = input_word_windows
+#     input_dict[k]['cap'] = input_cap_windows
+#     input_dict[k]['out'] = output
+#   return input_dict, word_to_idx
 
 
 def run_tests():
@@ -266,7 +287,6 @@ FILE_PATHS = {"PTB": ("data/train.tags.txt",
             "data/glove.6B.50d.txt")}
 args = {}
 
-
 def main(arguments):
   global args
   parser = argparse.ArgumentParser(
@@ -314,7 +334,7 @@ def main(arguments):
   # test_input_word_windows, test_input_cap_windows, test_output = \
   #   input_dict[test]['word'],input_dict[test]['cap'],input_dict[test]['out']
 
-  V = len(word_to_idx) + 1
+  V = len(word_to_idx)
   print('Vocab size: {0}'.format(V))
 
   C = np.max(train_output)
