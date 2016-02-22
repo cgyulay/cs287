@@ -2,7 +2,8 @@
 require("hdf5")
 require("nn")
 require("optim")
-
+require("gnuplot")
+require("cutorch")
 cmd = torch.CmdLine()
 
 -- Cmd Args
@@ -112,23 +113,30 @@ function model(structure)
   local dhid = 200
 
   local model = nn.Sequential()
+  -- :cuda()
 
   if structure == 'lr' then
     print('Building logistic regression model...')
 
     local sparseW_word = nn.LookupTable(nwords, nclasses)
+    -- :cuda()
     local W_word = nn.Sequential():add(sparseW_word):add(nn.Sum(2))
+    -- :cuda()
 
     local sparseW_cap = nn.LookupTable(ncaps, nclasses)
+    -- :cuda()
     local W_cap = nn.Sequential():add(sparseW_cap):add(nn.Sum(2))
+    -- :cuda()
     
     local par = nn.ParallelTable()
+    -- :cuda()
     par:add(W_word) -- first child
     par:add(W_cap) -- second child
 
-    local logsoftmax = nn.LogSoftMax()
+    local logsoftmax = nn.LogSoftMax():cuda()
 
     model:add(par):add(nn.CAddTable()):add(logsoftmax)
+
   elseif structure == 'mlp' then
     print('Building multilayer perceptron model...')
 
@@ -164,6 +172,8 @@ function model(structure)
   nll.sizeAverage = false
 
   local params, gradParams = model:getParameters()
+
+  local accuracy = {}
 
   function train(e)
     -- Package selected dataset into minibatches
@@ -242,8 +252,129 @@ function model(structure)
     train(i)
     print('Epoch ' .. i .. ' training completed in ' .. timer:time().real .. ' seconds.')
     print('Validation accuracy after epoch ' .. i .. ': ' .. valid_acc() .. ' %.')
+    accuracy[i] = valid_acc
   end
+
+  table.save(accuracy, 'output.txt')
+  plot(train_plot_data, 'Linear SVM Training Accuracy', 'Epochs', 'Accuracy', 'train')
+  plot(valid_plot_data, 'Linear SVM Validation Accuracy', 'Epochs', 'Accuracy', 'valid')
 end
+
+function plot(data, title, xlabel, ylabel, filename)
+  -- NB: requires gnuplot
+  -- gnuplot.raw('set xtics (0, 1, 2, 3, 4, 5)')
+  gnuplot.pngfigure(filename .. '.png')
+  gnuplot.plot(data)
+  gnuplot.title(title)
+  gnuplot.xlabel(xlabel)
+  gnuplot.ylabel(ylabel)
+  gnuplot.plotflush()
+end
+
+-- declare local variables
+--// exportstring( string )
+--// returns a "Lua" portable version of the string
+local function exportstring( s )
+  return string.format("%q", s)
+end
+
+--// The Save Function
+function table.save(  tbl,filename )
+  local charS,charE = "   ","\n"
+  local file,err = io.open( filename, "wb" )
+  if err then return err end
+
+  -- initiate variables for save procedure
+  local tables,lookup = { tbl },{ [tbl] = 1 }
+  file:write( "return {"..charE )
+
+  for idx,t in ipairs( tables ) do
+     file:write( "-- Table: {"..idx.."}"..charE )
+     file:write( "{"..charE )
+     local thandled = {}
+
+     for i,v in ipairs( t ) do
+        thandled[i] = true
+        local stype = type( v )
+        -- only handle value
+        if stype == "table" then
+           if not lookup[v] then
+              table.insert( tables, v )
+              lookup[v] = #tables
+           end
+           file:write( charS.."{"..lookup[v].."},"..charE )
+        elseif stype == "string" then
+           file:write(  charS..exportstring( v )..","..charE )
+        elseif stype == "number" then
+           file:write(  charS..tostring( v )..","..charE )
+        end
+     end
+
+     for i,v in pairs( t ) do
+        -- escape handled values
+        if (not thandled[i]) then
+        
+           local str = ""
+           local stype = type( i )
+           -- handle index
+           if stype == "table" then
+              if not lookup[i] then
+                 table.insert( tables,i )
+                 lookup[i] = #tables
+              end
+              str = charS.."[{"..lookup[i].."}]="
+           elseif stype == "string" then
+              str = charS.."["..exportstring( i ).."]="
+           elseif stype == "number" then
+              str = charS.."["..tostring( i ).."]="
+           end
+        
+           if str ~= "" then
+              stype = type( v )
+              -- handle value
+              if stype == "table" then
+                 if not lookup[v] then
+                    table.insert( tables,v )
+                    lookup[v] = #tables
+                 end
+                 file:write( str.."{"..lookup[v].."},"..charE )
+              elseif stype == "string" then
+                 file:write( str..exportstring( v )..","..charE )
+              elseif stype == "number" then
+                 file:write( str..tostring( v )..","..charE )
+              end
+           end
+        end
+     end
+     file:write( "},"..charE )
+  end
+  file:write( "}" )
+  file:close()
+end
+
+--// The Load Function
+function table.load( sfile )
+  local ftables,err = loadfile( sfile )
+  if err then return _,err end
+  local tables = ftables()
+  for idx = 1,#tables do
+     local tolinki = {}
+     for i,v in pairs( tables[idx] ) do
+        if type( v ) == "table" then
+           tables[idx][i] = tables[v[1]]
+        end
+        if type( i ) == "table" and tables[i[1]] then
+           table.insert( tolinki,{ i,tables[i[1]] } )
+        end
+     end
+     -- link indices
+     for _,v in ipairs( tolinki ) do
+        tables[idx][v[2]],tables[idx][v[1]] =  tables[idx][v[1]],nil
+     end
+  end
+  return tables[1]
+end
+
 
 function main() 
   -- Parse input params
@@ -289,6 +420,7 @@ function main()
 
     return d
   end
+
 
   -- train_input = combine(train_input_word_windows, train_input_cap_windows)
   -- valid_input = combine(valid_input_word_windows, valid_input_cap_windows)
