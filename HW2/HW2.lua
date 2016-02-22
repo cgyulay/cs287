@@ -111,13 +111,24 @@ function model(structure)
   local dout = nclasses
   local dhid = 200
 
-  
   local model = nn.Sequential()
 
   if structure == 'lr' then
     print('Building logistic regression model...')
-    model:add(nn.Linear(din, dhid))
-    model:add(nn.LogSoftMax())
+
+    local sparseW_word = nn.LookupTable(nwords, nclasses)
+    local W_word = nn.Sequential():add(sparseW_word):add(nn.Sum(2))
+
+    local sparseW_cap = nn.LookupTable(ncaps, nclasses)
+    local W_cap = nn.Sequential():add(sparseW_cap):add(nn.Sum(2))
+    
+    local par = nn.ParallelTable()
+    par:add(W_word) -- first child
+    par:add(W_cap) -- second child
+
+    local logsoftmax = nn.LogSoftMax()
+
+    model:add(par):add(nn.CAddTable()):add(logsoftmax)
   elseif structure == 'mlp' then
     print('Building multilayer perceptron model...')
 
