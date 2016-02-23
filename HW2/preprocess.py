@@ -95,7 +95,7 @@ def create_windows_for_sentences(sentences, dwin, word_to_idx):
     for i in range(len(s) - total_padding):
       word_window = s[i:i + total_padding + 1]
 
-      # # word, pos, case
+      # word, pos, case
       input_word_windows.append([word_to_idx[w[0]] for w in word_window])
       input_cap_windows.append([w[2] for w in word_window])
 
@@ -103,6 +103,7 @@ def create_windows_for_sentences(sentences, dwin, word_to_idx):
 
       output.append(word_window[num_padding][1])
 
+  # word window, cap window, output
   return np.array(input_word_windows, dtype=np.int32), \
     np.array(input_cap_windows, dtype=np.int32), \
     np.array(output, dtype=np.int32)
@@ -129,8 +130,8 @@ def get_vocab(file_list, vecs_dict):
     return np.array(np.random.randn((nembeddings)) * 0.1)
 
   embeddings.append(random_embedding()) # first line for padding
-
   # embeddings.append(random_embedding()) # second line for rare words
+
   for filename in file_list:
     if filename:
       with codecs.open(filename, "r", encoding="latin-1") as f:
@@ -158,6 +159,7 @@ def get_vocab(file_list, vecs_dict):
               embeddings.append(random_embedding())
               word_to_idx[word] = idx
               idx += 1
+              # word_to_idx[word] = 2
 
   print("Testing Correctness of Word Embeddings...")
   for word,idx in word_to_idx.items():
@@ -358,7 +360,7 @@ def main(arguments):
     # f['matrix'] = np.array(emb_matrix)
 
     # TODO: word embeddings from data/glove.6B.50d.txt.gz
-    f['word_embeddings'] = np.array([0], dtype=np.int32)
+    # f['word_embeddings'] = np.array([0], dtype=np.int32)
 
 
 if __name__ == '__main__':
