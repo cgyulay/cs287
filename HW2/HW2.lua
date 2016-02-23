@@ -110,7 +110,8 @@ end
 
 function model(structure)
   local embedding_size = 50
-  local din = dwin * (embedding_size + ncaps)
+  local caps_size = 5
+  local din = dwin * (embedding_size + caps_size)
   local dout = nclasses
 
   local model = nn.Sequential()
@@ -154,8 +155,8 @@ function model(structure)
 
     -- Cap LookupTable
     local cap_lookup = nn.Sequential()
-    local c = nn.LookupTable(dwin, ncaps)
-    local c_reshape = nn.Reshape(dwin * ncaps)
+    local c = nn.LookupTable(ncaps, caps_size)
+    local c_reshape = nn.Reshape(dwin * caps_size)
     cap_lookup:add(c):add(c_reshape)
 
     local par = nn.ParallelTable()
@@ -237,13 +238,14 @@ function model(structure)
 
       options = {
         learningRate = eta,
-        learningRateDecay = 0.0001
+        learningRateDecay = 0.001
         -- alpha = 0.95 -- For rmsprop
         -- momentum = 0.5
       }
 
       -- Use optim package for minibatch sgd
       optim.sgd(run_minibatch, params, options)
+      -- optim.adagrad(run_minibatch, params, options)
       -- optim.rmsprop(run_minibatch, params, options) -- Slower
     end
   end
@@ -265,7 +267,7 @@ function model(structure)
     return test(train_input_word_windows, train_input_cap_windows, train_output)
   end
 
-  print('Validation accuracy before training: ' .. valid_acc() .. ' %.')
+  -- print('Validation accuracy before training: ' .. valid_acc() .. ' %.')
   print('Beginning training...')
   local vloss = torch.DoubleTensor(n_epochs) -- valid/train loss/accuracy/time
   local tloss = torch.DoubleTensor(n_epochs)
@@ -291,7 +293,7 @@ function model(structure)
   end
 
   print('Writing to file...\n')
-  local f = torch.DiskFile('training_output/mlptest_pretrainedembed_relu_dhid=' .. dhid .. '.txt', 'w')
+  local f = torch.DiskFile('training_output/mlptest_pretrainedembed_eta=' .. eta .. '.txt', 'w')
   f:seekEnd()
   f:writeString('\nMLP hyperparams: eta=' .. eta .. ', dhid=' .. dhid .. ', dwin=' .. dwin .. ', pretrainedembed=no')
   f:writeString('\nValid Acc, Train Acc, Valid Loss, Train Loss, Time\n')
@@ -478,20 +480,18 @@ function main()
   -- valid_input = combine(valid_input_word_windows, valid_input_cap_windows)
   -- test_input = combine(test_input_word_windows, test_input_cap_windows)
 
-   -- Run models
+  -- Run models
   if opt.classifier == 'nb' then
     naive_bayes()
   else
-
-    -- dhid = 300
-    local dhids = {
-      300,
-      400
+    dhid = 300
+    local etas = {
+      0.04
     }
 
-    for k,v in pairs(dhids) do
-      print('dhid = ' .. v)
-      dhid = v
+    for k,v in pairs(etas) do
+      print('eta = ' .. v)
+      eta = v
       model(opt.classifier)
     end
   end
