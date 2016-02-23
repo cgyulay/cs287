@@ -238,7 +238,7 @@ function model(structure)
 
       options = {
         learningRate = eta,
-        learningRateDecay = 0.001
+        learningRateDecay = 0.0001
         -- alpha = 0.95 -- For rmsprop
         -- momentum = 0.5
       }
@@ -293,9 +293,9 @@ function model(structure)
   end
 
   print('Writing to file...\n')
-  local f = torch.DiskFile('training_output/mlptest_pretrainedembed_eta=' .. eta .. '.txt', 'w')
+  local f = torch.DiskFile('training_output/mlptest_adagrad_pretrainedembed_eta=' .. eta .. '.txt', 'w')
   f:seekEnd()
-  f:writeString('\nMLP hyperparams: eta=' .. eta .. ', dhid=' .. dhid .. ', dwin=' .. dwin .. ', pretrainedembed=no')
+  f:writeString('\nMLP hyperparams: eta=' .. eta .. ', dhid=' .. dhid .. ', dwin=' .. dwin .. ', pretrainedembed=' .. embed)
   f:writeString('\nValid Acc, Train Acc, Valid Loss, Train Loss, Time\n')
 
   for i = 1, n_epochs do
@@ -486,7 +486,9 @@ function main()
   else
     dhid = 300
     local etas = {
-      0.04
+      0.01
+      -- 0.005,
+      -- 0.001
     }
 
     for k,v in pairs(etas) do
