@@ -3,6 +3,7 @@ require("hdf5")
 require("nn")
 require("optim")
 require("gnuplot")
+require("math")
 -- require("cutorch")
 
 cmd = torch.CmdLine()
@@ -51,7 +52,6 @@ function naive_bayes(alphas)
   -- Add smoothing to account for words/caps not appearing in a position/class
   local nb_accuracy = {}
 
-  print(alphas)
   for k, v in pairs(alphas) do
     word_alpha = word_occurrences:clone()
     cap_alpha = cap_occurrences:clone()
@@ -121,8 +121,8 @@ function naive_bayes(alphas)
 
   f:close()
     -- print('Running naive bayes on test set...')
-    pred = predict(test_x, word_occurrences, p_y)
-    writeToFile(pred)
+  -- test_preds = predict(test_input_word_windows, test_input_cap_windows)
+  -- writeToFile(test_preds)
 end
 
 function model(structure)
@@ -215,6 +215,7 @@ function model(structure)
 
     print('\nBeginning epoch ' .. e .. ' training: ' .. n_train_batches .. ' minibatches of size ' .. batch_size .. '.')
     for i = 1, n_train_batches do
+      -- n_train_batches do
 
       local batch_start = torch.random(i*batch_size+1, (i+1)*batch_size)
       local batch_end = math.min((batch_start + batch_size - 1), order:size(1))
@@ -290,7 +291,7 @@ function model(structure)
     return test(train_input_word_windows, train_input_cap_windows, train_output)
   end
 
-  -- print('Validation accuracy before training: ' .. valid_acc() .. ' %.')
+  print('Validation accuracy before training: ' .. valid_acc() .. ' %.')
   print('Beginning training...')
   local vloss = torch.DoubleTensor(n_epochs) -- valid/train loss/accuracy/time
   local tloss = torch.DoubleTensor(n_epochs)
@@ -316,15 +317,19 @@ function model(structure)
   end
 
   print('Writing to file...\n')
-  local f = torch.DiskFile('training_output/mlptest_pretrainedembed_eta=' .. eta .. '.txt', 'w')
+  local f = torch.DiskFile('training_output/mlptest_twolayer_eta=' .. eta .. '.txt', 'w')
   f:seekEnd()
-  f:writeString('\nMLP hyperparams: eta=' .. eta .. ', dhid=' .. dhid .. ', dwin=' .. dwin .. ', pretrainedembed=no')
+  f:writeString('\nMLP hyperparams: eta=' .. eta .. ', dhid1=' .. dhid .. ', dhid2=' .. dhid2 ..', dwin=' .. dwin .. ', pretrainedembed=yes')
   f:writeString('\nValid Acc, Train Acc, Valid Loss, Train Loss, Time\n')
 
   for i = 1, n_epochs do
     f:writeString(vacc[i] .. ',' .. tacc[i] .. ',' .. vloss[i] .. ','  .. tloss[i] .. ','  .. etime[i] .. '\n')
   end
   f:close()
+
+  local test_preds = model:forward({test_input_word_windows, test_input_cap_windows})
+  local pred_val, pred_idx = torch.max(test_preds, 2)
+  writeToFile(pred_idx)
 end
 
 -- Writing to file
@@ -334,7 +339,8 @@ function writeToFile(predictions)
   local id = 1
 
   for i = 1, predictions:size(1) do
-    f:writeString(id .. ',' .. predictions[i] .. '\n')
+    local pred = predictions[i][1]
+    f:writeString(id .. ',' .. pred .. '\n')
     id = id + 1
   end
   f:close()
