@@ -17,7 +17,7 @@ cmd:option('-n_epochs', 15, 'number of training epochs')
 cmd:option('-m', 32, 'minibatch size')
 cmd:option('-embed', 'n', 'word embeddings')
 
-function naive_bayes()
+function naive_bayes(alphas)
   print('Building naive bayes model...')
 
   -- Generate prior for each part of speech
@@ -49,63 +49,80 @@ function naive_bayes()
   end
 
   -- Add smoothing to account for words/caps not appearing in a position/class
-  word_occurrences:add(alpha)
-  cap_occurrences:add(alpha)
+  local nb_accuracy = {}
 
-  -- Normalize to 1
-  for y = 1, nclasses do
-    for p = 1, dwin do
-      -- All word/cap occurrences at position p in class y
-      local w_sum = word_occurrences[y][p]:sum()
-      local c_sum = cap_occurrences[y][p]:sum()
+  print(alphas)
+  for k, v in pairs(alphas) do
+    word_alpha = word_occurrences:clone()
+    cap_alpha = cap_occurrences:clone()
+    word_alpha:add(v)
+    cap_alpha:add(v)
 
-      -- Divide by sum across nwords/ncaps
-      word_occurrences:select(1, y):select(1, p):div(w_sum)
-      cap_occurrences:select(1, y):select(1, p):div(c_sum)
-    end
-  end
+    -- Normalize to 1
+    for y = 1, nclasses do
+      for p = 1, dwin do
+        -- All word/cap occurrences at position p in class y
+        local w_sum = word_alpha[y][p]:sum()
+        local c_sum = cap_alpha[y][p]:sum()
 
-  print('Running naive bayes on validation set...')
-
-  function predict(word_windows, cap_windows)
-    local pred = torch.IntTensor(word_windows:size(1))
-    for i = 1, word_windows:size(1) do
-      local word_window = word_windows[i]
-      local cap_window = cap_windows[i]
-
-      local p_y_hat = torch.zeros(nclasses)
-      for y = 1, nclasses do
-        p_y_hat[y] = p_y[y]
-
-        -- Multiply p_y_hat by p(word at j|y) and p(cap at j|y)
-        for j = 1, dwin do
-          w = word_window[j]
-          c = cap_window[j]
-
-          p_y_hat[y] = p_y_hat[y] *  word_occurrences[y][j][w]
-          p_y_hat[y] = p_y_hat[y] *  cap_occurrences[y][j][c]
-        end
+        -- Divide by sum across nwords/ncaps
+        word_alpha:select(1, y):select(1, p):div(w_sum)
+        cap_alpha:select(1, y):select(1, p):div(c_sum)
       end
-
-      p_y_hat:div(p_y_hat:sum())
-      val, prediction = torch.max(p_y_hat, 1)
-
-      pred[i] = prediction
     end
-    return pred
+
+    print('Running naive bayes on validation set...')
+
+    function predict(word_windows, cap_windows)
+      local pred = torch.IntTensor(word_windows:size(1))
+      for i = 1, word_windows:size(1) do
+        local word_window = word_windows[i]
+        local cap_window = cap_windows[i]
+
+        local p_y_hat = torch.zeros(nclasses)
+        for y = 1, nclasses do
+          p_y_hat[y] = p_y[y]
+
+          -- Multiply p_y_hat by p(word at j|y) and p(cap at j|y)
+          for j = 1, dwin do
+            w = word_window[j]
+            c = cap_window[j]
+
+            p_y_hat[y] = p_y_hat[y] *  word_alpha[y][j][w]
+            p_y_hat[y] = p_y_hat[y] *  cap_alpha[y][j][c]
+          end
+        end
+
+        p_y_hat:div(p_y_hat:sum())
+        val, prediction = torch.max(p_y_hat, 1)
+
+        pred[i] = prediction
+      end
+      return pred
+    end
+
+    -- Generate predictions on validation
+    local pred = predict(valid_input_word_windows,valid_input_cap_windows)
+
+    pred = pred:eq(valid_output):double()
+    local accuracy = torch.mean(pred) * 100
+    nb_accuracy[v] = accuracy
+    print('Alpha ' .. v .. ' Validation accuracy: ' .. accuracy .. '.')
+  end
+  -- print(nb_accuracy)
+  -- plot(nb_accuracy, 'Naive Bayes Validation Accuracy', 'Alpha', 'Accuracy', 'nb_alpha')
+
+  print('Writing to file...\n')
+  local f = torch.DiskFile('training_output/naivebayes.txt', 'w')
+  f:seekEnd()
+  for k, v in pairs(nb_accuracy) do
+    f:writeString('alpha ' .. k .. ' accuracy : ' .. '\n')
   end
 
-  -- Generate predictions on validation
-  local pred = predict(valid_input)
-
-  pred = pred:eq(valid_output):double()
-  local accuracy = torch.mean(pred) * 100
-
-  print('Validation accuracy: ' .. accuracy .. '.')
-
-  -- print('Running naive bayes on test set...')
-  -- pred = predict(test_x, word_occurrences, p_y)
-  -- writeToFile(pred)
+  f:close()
+    -- print('Running naive bayes on test set...')
+    -- pred = predict(test_x, word_occurrences, p_y)
+    -- writeToFile(pred)
 end
 
 function model(structure)
@@ -197,25 +214,26 @@ function model(structure)
     local selected_y = train_output
     local n_train_batches = math.floor(selected_x_ww:size(1) / batch_size) - 1
 
-    -- word_order = torch.randperm(selected_x_ww)
-    -- subsets = torch.range(1,order:size(1)-subset_size, subset_size)
+    word_order = torch.randperm(selected_x_ww)
+    subsets = torch.range(1,word_order:size(1)-subset_size, subset_size)
 
     print('\nBeginning epoch ' .. e .. ' training: ' .. n_train_batches .. ' minibatches of size ' .. batch_size .. '.')
     for i = 1, n_train_batches do
 
-      -- local batch_start = torch.random(i*subset_size+1, (i+1)*subset_size)
-      -- local batch_end = math.min((batch_start + batch_size - 1), order:size(1))
+      local batch_start = torch.random(i*subset_size+1, (i+1)*subset_size)
+      local batch_end = math.min((batch_start + batch_size - 1), order:size(1))
       -- --     -- print(batch_start .." - " .. batch_end)
-      -- batch = torch.Tensor(order[{{batch_start,batch_end}}])
+      local x_ww = torch.Tensor(selected_x_ww[{{batch_start,batch_end}}])
+      local x_cw = torch.Tensor(selected_x_cw[{{batch_start,batch_end}}])
 
-      local batch_start = torch.random(1, selected_x_ww:size(1) - batch_size)
-      -- local batch_start = (i - 1) * batch_size + 1
-      local batch_end = batch_start + batch_size - 1
+      -- local batch_start = torch.random(1, selected_x_ww:size(1) - batch_size)
+      -- -- local batch_start = (i - 1) * batch_size + 1
+      -- local batch_end = batch_start + batch_size - 1
 
-      local range = torch.range(batch_start, batch_end):long()
-      local x_ww = selected_x_ww:index(1, range)
+      -- local range = torch.range(batch_start, batch_end):long()
+      -- local x_ww = selected_x_ww:index(1, range)
 
-      local x_cw = selected_x_cw:index(1, range)
+      -- local x_cw = selected_x_cw:index(1, range)
       local y = selected_y:index(1, range)
 
       -- Compute forward and backward pass (predictions + gradient updates)
@@ -480,14 +498,16 @@ function main()
     return d
   end
 
-
+  alphas = {
+    0.0001, 0.001, 0.1, 0.2, 0.5, 1, 2
+  }
   -- train_input = combine(train_input_word_windows, train_input_cap_windows)
   -- valid_input = combine(valid_input_word_windows, valid_input_cap_windows)
   -- test_input = combine(test_input_word_windows, test_input_cap_windows)
 
    -- Run models
   if opt.classifier == 'nb' then
-    naive_bayes()
+    naive_bayes(alphas)
   else
 
     dhid = 300
