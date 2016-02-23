@@ -17,7 +17,7 @@ cmd:option('-n_epochs', 15, 'number of training epochs')
 cmd:option('-m', 32, 'minibatch size')
 cmd:option('-embed', 'n', 'word embeddings')
 
-function naive_bayes()
+function naive_bayes(alphas)
   print('Building naive bayes model...')
 
   -- Generate prior for each part of speech
@@ -49,63 +49,80 @@ function naive_bayes()
   end
 
   -- Add smoothing to account for words/caps not appearing in a position/class
-  word_occurrences:add(alpha)
-  cap_occurrences:add(alpha)
+  local nb_accuracy = {}
 
-  -- Normalize to 1
-  for y = 1, nclasses do
-    for p = 1, dwin do
-      -- All word/cap occurrences at position p in class y
-      local w_sum = word_occurrences[y][p]:sum()
-      local c_sum = cap_occurrences[y][p]:sum()
+  print(alphas)
+  for k, v in pairs(alphas) do
+    word_alpha = word_occurrences:clone()
+    cap_alpha = cap_occurrences:clone()
+    word_alpha:add(v)
+    cap_alpha:add(v)
 
-      -- Divide by sum across nwords/ncaps
-      word_occurrences:select(1, y):select(1, p):div(w_sum)
-      cap_occurrences:select(1, y):select(1, p):div(c_sum)
-    end
-  end
+    -- Normalize to 1
+    for y = 1, nclasses do
+      for p = 1, dwin do
+        -- All word/cap occurrences at position p in class y
+        local w_sum = word_alpha[y][p]:sum()
+        local c_sum = cap_alpha[y][p]:sum()
 
-  print('Running naive bayes on validation set...')
-
-  function predict(word_windows, cap_windows)
-    local pred = torch.IntTensor(word_windows:size(1))
-    for i = 1, word_windows:size(1) do
-      local word_window = word_windows[i]
-      local cap_window = cap_windows[i]
-
-      local p_y_hat = torch.zeros(nclasses)
-      for y = 1, nclasses do
-        p_y_hat[y] = p_y[y]
-
-        -- Multiply p_y_hat by p(word at j|y) and p(cap at j|y)
-        for j = 1, dwin do
-          w = word_window[j]
-          c = cap_window[j]
-
-          p_y_hat[y] = p_y_hat[y] *  word_occurrences[y][j][w]
-          p_y_hat[y] = p_y_hat[y] *  cap_occurrences[y][j][c]
-        end
+        -- Divide by sum across nwords/ncaps
+        word_alpha:select(1, y):select(1, p):div(w_sum)
+        cap_alpha:select(1, y):select(1, p):div(c_sum)
       end
-
-      p_y_hat:div(p_y_hat:sum())
-      val, prediction = torch.max(p_y_hat, 1)
-
-      pred[i] = prediction
     end
-    return pred
+
+    print('Running naive bayes on validation set...')
+
+    function predict(word_windows, cap_windows)
+      local pred = torch.IntTensor(word_windows:size(1))
+      for i = 1, word_windows:size(1) do
+        local word_window = word_windows[i]
+        local cap_window = cap_windows[i]
+
+        local p_y_hat = torch.zeros(nclasses)
+        for y = 1, nclasses do
+          p_y_hat[y] = p_y[y]
+
+          -- Multiply p_y_hat by p(word at j|y) and p(cap at j|y)
+          for j = 1, dwin do
+            w = word_window[j]
+            c = cap_window[j]
+
+            p_y_hat[y] = p_y_hat[y] *  word_alpha[y][j][w]
+            p_y_hat[y] = p_y_hat[y] *  cap_alpha[y][j][c]
+          end
+        end
+
+        p_y_hat:div(p_y_hat:sum())
+        val, prediction = torch.max(p_y_hat, 1)
+
+        pred[i] = prediction
+      end
+      return pred
+    end
+
+    -- Generate predictions on validation
+    local pred = predict(valid_input_word_windows,valid_input_cap_windows)
+
+    pred = pred:eq(valid_output):double()
+    local accuracy = torch.mean(pred) * 100
+    nb_accuracy[v] = accuracy
+    print('Alpha ' .. v .. ' Validation accuracy: ' .. accuracy .. '.')
+  end
+  -- print(nb_accuracy)
+  -- plot(nb_accuracy, 'Naive Bayes Validation Accuracy', 'Alpha', 'Accuracy', 'nb_alpha')
+
+  print('Writing to file...\n')
+  local f = torch.DiskFile('training_output/naivebayes.txt', 'w')
+  f:seekEnd()
+  for k, v in pairs(nb_accuracy) do
+    f:writeString('alpha ' .. k .. ' accuracy : ' .. '\n')
   end
 
-  -- Generate predictions on validation
-  local pred = predict(valid_input)
-
-  pred = pred:eq(valid_output):double()
-  local accuracy = torch.mean(pred) * 100
-
-  print('Validation accuracy: ' .. accuracy .. '.')
-
-  -- print('Running naive bayes on test set...')
-  -- pred = predict(test_x, word_occurrences, p_y)
-  -- writeToFile(pred)
+  f:close()
+    -- print('Running naive bayes on test set...')
+    pred = predict(test_x, word_occurrences, p_y)
+    writeToFile(pred)
 end
 
 function model(structure)
@@ -113,6 +130,7 @@ function model(structure)
   local caps_size = 5
   local din = dwin * (embedding_size + caps_size)
   local dout = nclasses
+  local dhid2 = 200
 
   local model = nn.Sequential()
 
@@ -169,7 +187,9 @@ function model(structure)
     model:add(nn.HardTanh())
     -- model:add(nn.ReLU())
     -- model:add(nn.Dropout(0.5))
-    model:add(nn.Linear(dhid, dout))
+    model:add(nn.Linear(dhid, dhid2))
+    model:add(nn.HardTanh())
+    model:add(nn.Linear(dhid2, dout))
     model:add(nn.LogSoftMax())
   else
     print('Classifier incorrectly specified, bailing out.')
@@ -190,26 +210,29 @@ function model(structure)
     local selected_y = train_output
     local n_train_batches = math.floor(selected_x_ww:size(1) / batch_size) - 1
 
-    -- word_order = torch.randperm(selected_x_ww)
-    -- subsets = torch.range(1,order:size(1)-subset_size, subset_size)
+    order = torch.randperm(selected_x_ww:size(1))
+    -- subsets = torch.range(1,word_order:size(1)-subset_size, subset_size)
 
     print('\nBeginning epoch ' .. e .. ' training: ' .. n_train_batches .. ' minibatches of size ' .. batch_size .. '.')
     for i = 1, n_train_batches do
 
-      -- local batch_start = torch.random(i*subset_size+1, (i+1)*subset_size)
-      -- local batch_end = math.min((batch_start + batch_size - 1), order:size(1))
+      local batch_start = torch.random(i*batch_size+1, (i+1)*batch_size)
+      local batch_end = math.min((batch_start + batch_size - 1), order:size(1))
       -- --     -- print(batch_start .." - " .. batch_end)
-      -- batch = torch.Tensor(order[{{batch_start,batch_end}}])
 
-      local batch_start = torch.random(1, selected_x_ww:size(1) - batch_size)
-      -- local batch_start = (i - 1) * batch_size + 1
-      local batch_end = batch_start + batch_size - 1
+      curr_batch = order[{{batch_start,batch_end}}]:long()
+      local x_ww = selected_x_ww:index(1, curr_batch)
+      local x_cw = selected_x_cw:index(1, curr_batch)
 
-      local range = torch.range(batch_start, batch_end):long()
-      local x_ww = selected_x_ww:index(1, range)
+      -- local batch_start = torch.random(1, selected_x_ww:size(1) - batch_size)
+      -- -- local batch_start = (i - 1) * batch_size + 1
+      -- local batch_end = batch_start + batch_size - 1
 
-      local x_cw = selected_x_cw:index(1, range)
-      local y = selected_y:index(1, range)
+      -- local range = torch.range(batch_start, batch_end):long()
+      -- local x_ww = selected_x_ww:index(1, range)
+
+      -- local x_cw = selected_x_cw:index(1, range)
+      local y = selected_y:index(1, curr_batch)
 
       -- Compute forward and backward pass (predictions + gradient updates)
       function run_minibatch(p)
@@ -304,117 +327,18 @@ function model(structure)
   f:close()
 end
 
---     print('Validation accuracy after epoch ' .. i .. ': ' .. valid_acc() .. ' %.')
---     accuracy[i] = valid_acc
---   end
+-- Writing to file
+function writeToFile(predictions)
+  local f = torch.DiskFile('predictions.txt', 'w')
+  f:writeString('ID,Category\n')
+  local id = 1
 
---   table.save(accuracy, 'output.txt')
---   plot(train_plot_data, 'Linear SVM Training Accuracy', 'Epochs', 'Accuracy', 'train')
---   plot(valid_plot_data, 'Linear SVM Validation Accuracy', 'Epochs', 'Accuracy', 'valid')
--- end
-
--- -- declare local variables
--- --// exportstring( string )
--- --// returns a "Lua" portable version of the string
--- local function exportstring( s )
---   return string.format("%q", s)
--- end
-
--- --// The Save Function
--- function table.save(  tbl,filename )
---   local charS,charE = "   ","\n"
---   local file,err = io.open( filename, "wb" )
---   if err then return err end
-
---   -- initiate variables for save procedure
---   local tables,lookup = { tbl },{ [tbl] = 1 }
---   file:write( "return {"..charE )
-
---   for idx,t in ipairs( tables ) do
---      file:write( "-- Table: {"..idx.."}"..charE )
---      file:write( "{"..charE )
---      local thandled = {}
-
---      for i,v in ipairs( t ) do
---         thandled[i] = true
---         local stype = type( v )
---         -- only handle value
---         if stype == "table" then
---            if not lookup[v] then
---               table.insert( tables, v )
---               lookup[v] = #tables
---            end
---            file:write( charS.."{"..lookup[v].."},"..charE )
---         elseif stype == "string" then
---            file:write(  charS..exportstring( v )..","..charE )
---         elseif stype == "number" then
---            file:write(  charS..tostring( v )..","..charE )
---         end
---      end
-
---      for i,v in pairs( t ) do
---         -- escape handled values
---         if (not thandled[i]) then
-        
---            local str = ""
---            local stype = type( i )
---            -- handle index
---            if stype == "table" then
---               if not lookup[i] then
---                  table.insert( tables,i )
---                  lookup[i] = #tables
---               end
---               str = charS.."[{"..lookup[i].."}]="
---            elseif stype == "string" then
---               str = charS.."["..exportstring( i ).."]="
---            elseif stype == "number" then
---               str = charS.."["..tostring( i ).."]="
---            end
-        
---            if str ~= "" then
---               stype = type( v )
---               -- handle value
---               if stype == "table" then
---                  if not lookup[v] then
---                     table.insert( tables,v )
---                     lookup[v] = #tables
---                  end
---                  file:write( str.."{"..lookup[v].."},"..charE )
---               elseif stype == "string" then
---                  file:write( str..exportstring( v )..","..charE )
---               elseif stype == "number" then
---                  file:write( str..tostring( v )..","..charE )
---               end
---            end
---         end
---      end
---      file:write( "},"..charE )
---   end
---   file:write( "}" )
---   file:close()
--- end
-
--- --// The Load Function
--- function table.load( sfile )
---   local ftables,err = loadfile( sfile )
---   if err then return _,err end
---   local tables = ftables()
---   for idx = 1,#tables do
---      local tolinki = {}
---      for i,v in pairs( tables[idx] ) do
---         if type( v ) == "table" then
---            tables[idx][i] = tables[v[1]]
---         end
---         if type( i ) == "table" and tables[i[1]] then
---            table.insert( tolinki,{ i,tables[i[1]] } )
---         end
---      end
---      -- link indices
---      for _,v in ipairs( tolinki ) do
---         tables[idx][v[2]],tables[idx][v[1]] =  tables[idx][v[1]],nil
---      end
---   end
---   return tables[1]
+  for i = 1, predictions:size(1) do
+    f:writeString(id .. ',' .. predictions[i] .. '\n')
+    id = id + 1
+  end
+  f:close()
+end
 
 -- Plotting
 function plot(data, title, xlabel, ylabel, filename)
@@ -476,13 +400,17 @@ function main()
     return d
   end
 
+  alphas = {
+    0.0001, 0.001, 0.1, 0.2, 0.5, 1, 2
+  }
+
   -- train_input = combine(train_input_word_windows, train_input_cap_windows)
   -- valid_input = combine(valid_input_word_windows, valid_input_cap_windows)
   -- test_input = combine(test_input_word_windows, test_input_cap_windows)
 
   -- Run models
   if opt.classifier == 'nb' then
-    naive_bayes()
+    naive_bayes(alphas)
   else
     dhid = 300
     local etas = {
