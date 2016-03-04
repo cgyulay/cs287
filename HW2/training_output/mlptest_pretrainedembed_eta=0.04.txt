@@ -1,5 +1,5 @@
 
-MLP hyperparams: eta=0.04, dhid=300, dwin=5, pretrainedembed=no
+MLP hyperparams: eta=0.04, dhid=300, dwin=5, pretrainedembed=yes
 Valid Acc, Train Acc, Valid Loss, Train Loss, Time
 93.301620538966,93.498826514848,0.22282917589496,0.2184759088995,128.21698403358
 94.794701383831,95.05591311608,0.17146341919019,0.16012190785528,122.29743885994

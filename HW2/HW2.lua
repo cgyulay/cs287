@@ -18,7 +18,31 @@ cmd:option('-n_epochs', 15, 'number of training epochs')
 cmd:option('-m', 32, 'minibatch size')
 cmd:option('-embed', 'n', 'word embeddings')
 
-function naive_bayes(alphas)
+-- Writing to file
+function writeToFile(predictions)
+  local f = torch.DiskFile('predictions.txt', 'w')
+  f:writeString('ID,Category\n')
+  local id = 1
+
+  for i = 1, predictions:size(1) do
+    local pred = predictions[i][1]
+    f:writeString(id .. ',' .. pred .. '\n')
+    id = id + 1
+  end
+  f:close()
+end
+
+-- Plotting
+function plot(data, title, xlabel, ylabel, filename)
+  gnuplot.pngfigure(filename .. '.png')
+  gnuplot.plot(data)
+  gnuplot.title(title)
+  gnuplot.xlabel(xlabel)
+  gnuplot.ylabel(ylabel)
+  gnuplot.plotflush()
+end
+
+function naive_bayes()
   print('Building naive bayes model...')
 
   -- Generate prior for each part of speech
@@ -52,6 +76,10 @@ function naive_bayes(alphas)
   -- Add smoothing to account for words/caps not appearing in a position/class
   local nb_accuracy = {}
 
+  alphas = {
+    0.01
+  }
+
   for k, v in pairs(alphas) do
     word_alpha = word_occurrences:clone()
     cap_alpha = cap_occurrences:clone()
@@ -71,8 +99,6 @@ function naive_bayes(alphas)
       end
     end
 
-    print('Running naive bayes on validation set...')
-
     function predict(word_windows, cap_windows)
       local pred = torch.IntTensor(word_windows:size(1))
       for i = 1, word_windows:size(1) do
@@ -88,8 +114,8 @@ function naive_bayes(alphas)
             w = word_window[j]
             c = cap_window[j]
 
-            p_y_hat[y] = p_y_hat[y] *  word_alpha[y][j][w]
-            p_y_hat[y] = p_y_hat[y] *  cap_alpha[y][j][c]
+            p_y_hat[y] = p_y_hat[y] * word_alpha[y][j][w]
+            p_y_hat[y] = p_y_hat[y] * cap_alpha[y][j][c]
           end
         end
 
@@ -101,13 +127,20 @@ function naive_bayes(alphas)
       return pred
     end
 
+    print('Running naive bayes on validation set...')
+
     -- Generate predictions on validation
-    local pred = predict(valid_input_word_windows,valid_input_cap_windows)
+    local pred = predict(valid_input_word_windows, valid_input_cap_windows)
 
     pred = pred:eq(valid_output):double()
     local accuracy = torch.mean(pred) * 100
     nb_accuracy[v] = accuracy
     print('Alpha ' .. v .. ' Validation accuracy: ' .. accuracy .. '.')
+
+    pred = predict(train_input_word_windows, train_input_cap_windows)
+    pred = pred:eq(train_output):double()
+    accuracy = torch.mean(pred) * 100
+    print('Train accuracy: ' .. accuracy .. '.')
   end
   -- print(nb_accuracy)
   -- plot(nb_accuracy, 'Naive Bayes Validation Accuracy', 'Alpha', 'Accuracy', 'nb_alpha')
@@ -137,6 +170,13 @@ function model(structure)
   if structure == 'lr' then
     print('Building logistic regression model...')
 
+    -- local x_ww = torch.zeros(2,5)
+    -- x_ww[1] = train_input_word_windows[1]
+    -- x_ww[2] = train_input_word_windows[2]
+    -- local x_cw = torch.zeros(2,5)
+    -- x_cw[1] = train_input_cap_windows[1]
+    -- x_cw[2] = train_input_cap_windows[2]
+
     local sparseW_word = nn.LookupTable(nwords, nclasses)
     local W_word = nn.Sequential():add(sparseW_word):add(nn.Sum(2))
 
@@ -147,11 +187,18 @@ function model(structure)
     par:add(W_word) -- first child
     par:add(W_cap) -- second child
 
-    local logsoftmax = nn.LogSoftMax()
+    model:add(par)
+    model:add(nn.CAddTable())
+    model:add(nn.LogSoftMax())
+    -- print(model:forward({x_ww, x_cw}))
 
-    model:add(par):add(nn.CAddTable()):add(logsoftmax)
+    -- model:add(nn.LookupTable(nwords, nclasses))
+    -- -- print(model:forward(x_ww))
+    -- model:add(nn.Mean(2))
+    -- model:add(nn.Add(nclasses))
+    -- model:add(nn.LogSoftMax())
 
-  elseif structure == 'mlp' then
+  elseif structure == 'mlp' or structure == 'lb' then
     if embed == 'y' then
       print('Building multilayer perceptron model with pretrained embeddings...')
     else
@@ -183,13 +230,18 @@ function model(structure)
     model:add(par)
     model:add(nn.JoinTable(2))
 
-    model:add(nn.Linear(din, dhid))
-    model:add(nn.HardTanh())
-    -- model:add(nn.ReLU())
-    -- model:add(nn.Dropout(0.5))
-    model:add(nn.Linear(dhid, dhid2))
-    model:add(nn.HardTanh())
-    model:add(nn.Linear(dhid2, dout))
+    if structure == 'mlp' then
+      model:add(nn.Linear(din, dhid))
+      model:add(nn.HardTanh())
+      model:add(nn.Linear(dhid, dout))
+      -- model:add(nn.ReLU())
+      -- model:add(nn.Dropout(0.5))
+      -- model:add(nn.HardTanh())
+      -- model:add(nn.Linear(dhid2, dout))
+    elseif structure == 'lb' then
+      model:add(nn.Linear(din, dout))
+    end
+    
     model:add(nn.LogSoftMax())
   else
     print('Classifier incorrectly specified, bailing out.')
@@ -202,7 +254,6 @@ function model(structure)
   local params, gradParams = model:getParameters()
 
   local accuracy = {}
-
   function train(e)
     -- Package selected dataset into minibatches
     local selected_x_ww = train_input_word_windows
@@ -300,6 +351,10 @@ function model(structure)
   local etime = torch.DoubleTensor(n_epochs)
   
   for i = 1, n_epochs do
+    if i >= 10 then
+      eta = 0.01
+    end
+
     local timer = torch.Timer()
     train(i)
 
@@ -314,17 +369,19 @@ function model(structure)
 
     print('Epoch ' .. i .. ' training completed in ' .. timer:time().real .. ' seconds.')
     print('Validation accuracy after epoch ' .. i .. ': ' .. va .. ' %.')
+
+    local flr = torch.DiskFile('training_output/lrepoch=' .. i .. '.txt', 'w')
+    for j = 1, i do
+      flr:writeString(vacc[j] .. ',' .. tacc[j] .. ',' .. vloss[j] .. ','  .. tloss[j] .. ','  .. etime[j] .. '\n')
+    end
+    flr:close()
   end
 
   print('Writing to file...\n')
 
-  local f = torch.DiskFile('training_output/mlptest_twolayer_eta=' .. eta .. '.txt', 'w')
+  local f = torch.DiskFile('training_output/mlp_anneal_test_eta=' .. eta .. '.txt', 'w')
   f:seekEnd()
-  f:writeString('\nMLP hyperparams: eta=' .. eta .. ', dhid1=' .. dhid .. ', dhid2=' .. dhid2 ..', dwin=' .. dwin .. ', pretrainedembed=yes')
-
-  -- local f = torch.DiskFile('training_output/mlptest_adagrad_pretrainedembed_eta=' .. eta .. '.txt', 'w')
-  -- f:seekEnd()
-  -- f:writeString('\nMLP hyperparams: eta=' .. eta .. ', dhid=' .. dhid .. ', dwin=' .. dwin .. ', pretrainedembed=' .. embed)
+  f:writeString('\nMLP hyperparams: eta=' .. eta .. ', dhid1=' .. dhid .. ', dhid2=' .. dhid2 ..', dwin=' .. dwin .. ', pretrainedembed=' .. embed)
 
   f:writeString('\nValid Acc, Train Acc, Valid Loss, Train Loss, Time\n')
 
@@ -333,34 +390,10 @@ function model(structure)
   end
   f:close()
 
+  -- Write test results to file
   local test_preds = model:forward({test_input_word_windows, test_input_cap_windows})
   local pred_val, pred_idx = torch.max(test_preds, 2)
   writeToFile(pred_idx)
-end
-
--- Writing to file
-function writeToFile(predictions)
-  local f = torch.DiskFile('predictions.txt', 'w')
-  f:writeString('ID,Category\n')
-  local id = 1
-
-  for i = 1, predictions:size(1) do
-    local pred = predictions[i][1]
-    f:writeString(id .. ',' .. pred .. '\n')
-    id = id + 1
-  end
-  f:close()
-end
-
--- Plotting
-function plot(data, title, xlabel, ylabel, filename)
-  -- NB: requires gnuplot
-  gnuplot.pngfigure(filename .. '.png')
-  gnuplot.plot(data)
-  gnuplot.title(title)
-  gnuplot.xlabel(xlabel)
-  gnuplot.ylabel(ylabel)
-  gnuplot.plotflush()
 end
 
 function main() 
@@ -393,51 +426,16 @@ function main()
   nclasses = f:read('nclasses'):all():long()[1]
   dwin = f:read('dwin'):all():long()[1]
   ncaps = train_input_cap_windows:max()
-  embeddings = f:read('matrix'):all()
-
-  -- vectors = f:read['vector_dict']
-
-  function combine(ww, cw)
-    -- Concat word and cap windows into single tensor
-    -- d = torch.DoubleTensor(ww:size(1), ww:size(2) + cw:size(2))
-    -- d:narrow(2, 1, ww:size(2)):copy(ww)
-    -- d:narrow(2, ww:size(2) + 1, cw:size(2)):copy(cw)
-
-    -- Prep word and cap windows for parallel table
-    d = {}
-    for i = 1, ww:size(1) do
-      d[i] = {ww[i], cw[i]}
-    end
-
-    return d
-  end
-
-  alphas = {
-    0.0001, 0.001, 0.1, 0.2, 0.5, 1, 2
-  }
-
-  -- train_input = combine(train_input_word_windows, train_input_cap_windows)
-  -- valid_input = combine(valid_input_word_windows, valid_input_cap_windows)
-  -- test_input = combine(test_input_word_windows, test_input_cap_windows)
+  -- embeddings = f:read('matrix'):all()
+  dhid = 300
+  eta = 0.01
 
   -- Run models
   if opt.classifier == 'nb' then
-    naive_bayes(alphas)
+    naive_bayes()
   else
-    dhid = 300
-    local etas = {
-      0.01
-      -- 0.005,
-      -- 0.001
-    }
-
-    for k,v in pairs(etas) do
-      print('eta = ' .. v)
-      eta = v
-      model(opt.classifier)
-    end
+    model(opt.classifier)
   end
 end
 
 main()
-

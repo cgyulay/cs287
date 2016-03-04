@@ -96,10 +96,9 @@ def create_windows_for_sentences(sentences, dwin, word_to_idx):
       word_window = s[i:i + total_padding + 1]
 
       # word, pos, case
-      input_word_windows.append([word_to_idx[w[0]] for w in word_window])
+      # input_word_windows.append([word_to_idx[w[0]] for w in word_window])
       input_cap_windows.append([w[2] for w in word_window])
-
-      # input_word_windows.append([str(word_to_idx[w[0]+":"+str(i-2)]) for i, w in zip(range(0,len(word_window)), word_window)])
+      input_word_windows.append([str(word_to_idx[w[0]+":"+str(i-2)]) for i, w in zip(range(0,len(word_window)), word_window)])
 
       output.append(word_window[num_padding][1])
 
@@ -213,7 +212,6 @@ def vocab_window(file_list, dwin, vecs_dict):
           word = str(w[0])+":"+str(i)
           if word not in word_to_idx:
               word_to_idx[word] = idx
-
               idx += 1
 
         input_cap_windows.append([w[2] for w in word_window])
@@ -222,9 +220,9 @@ def vocab_window(file_list, dwin, vecs_dict):
         # print(word_window[num_padding])
         output.append(word_window[num_padding][1])
 
-    input_dict[k]['word'] = input_word_windows
-    input_dict[k]['cap'] = input_cap_windows
-    input_dict[k]['out'] = output
+    input_dict[k]['word'] = np.array(input_word_windows, dtype=np.int32)
+    input_dict[k]['cap'] = np.array(input_cap_windows, dtype=np.int32)
+    input_dict[k]['out'] = np.array(output, dtype=np.int32)
   return input_dict, word_to_idx
 
 
@@ -311,6 +309,7 @@ def main(arguments):
 
   # Get unique word dictionary and cleaned sentences
   # word_to_idx, sentences, emb_matrix = get_vocab([train, valid, test], word_vecs)
+  # print(len(sentences[train]) + len(sentences[valid]) + len(sentences[test]))
 
   # # Convert sentences to input, input_cap, and output windows
   dwin = 5
