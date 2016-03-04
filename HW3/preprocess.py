@@ -53,8 +53,7 @@ def build_ngrams(file_list, ngram):
             out = context[-1]
             input_ngrams[filename].append(inp)
             output[filename].append(out)
-
-          return
+  return input_ngrams, output
 
 def build_word_dict(filename):
   last_idx = -1
@@ -85,11 +84,15 @@ def main(arguments):
   train, valid, test, words = FILE_PATHS[dataset]
 
   build_word_dict(words)
-  input_dict, word_to_idx = build_ngrams([train, valid], ngram)
+  input_dict, output_dict = build_ngrams([train, valid], ngram)
+  train_input = np.array(input_dict[train], dtype=np.int32)
+  train_output = np.array(output_dict[train], dtype=np.int32)
+  valid_input = np.array(input_dict[valid], dtype=np.int32)
+  valid_output = np.array(output_dict[valid], dtype=np.int32)
   # TODO: build contexts for test, but only for the ngram before the blank
 
   V = len(word_to_idx)
-  C = np.max(train_output)
+  C = len(word_to_idx)
 
   filename = args.dataset + '.hdf5'
   with h5py.File(filename, "w") as f:
@@ -98,8 +101,8 @@ def main(arguments):
     if valid:
       f['valid_input'] = valid_input
       f['valid_output'] = valid_output
-    if test:
-      f['test_input'] = test_input
+    # if test:
+      # f['test_input'] = test_input
 
     f['nwords'] = np.array([V], dtype=np.int32)
     f['nclasses'] = np.array([C], dtype=np.int32)
