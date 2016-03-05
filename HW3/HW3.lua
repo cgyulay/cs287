@@ -83,10 +83,17 @@ function count_based(smoothing)
     for i = 1, x:size(1) do
       local ctx = tensor_to_key(x[i])
       local wi = y[i]
-      local p = ngrams[ctx][wi]
-      if p == nil then
+      local pctx = ngrams[ctx]
+      local p = 0
+      if pctx == nil then
         unseen = unseen + 1
         p = (1.0 / nwords) -- Uniform assumption
+      else
+        p = ngrams[ctx][wi]
+        if p == nil then
+          unseen = unseen + 1
+          p = (1.0 / nwords)
+        end
       end
       sum = sum + math.log(p)
     end
