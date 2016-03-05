@@ -27,8 +27,8 @@ function tensor_to_key(t)
   return string.sub(key, 1, -2) -- Remove trailing comma
 end
 
-function naive_bayes()
-  print('Building naive bayes model...')
+function count_based(smoothing)
+  print('Building count based model (ngram = ' .. ngram .. ')...')
 
   -- Easier to handle smoothing if each context gram has own dim
   -- Actually this wouldn't work for full vocab size (size constraints)
@@ -55,7 +55,7 @@ function naive_bayes()
     end
 
     if i % 100000 == 0 then
-      print('Seen ' .. i .. ' training examples.')
+      print('Processed ' .. i .. ' training examples.')
     end
   end
 
@@ -77,7 +77,32 @@ function naive_bayes()
     end
   end
 
-  print('Calculating perplexity on validation...')
+  function perplexity(x, y)
+    local sum = 0
+    local unseen = 0
+    for i = 1, x:size(1) do
+      local ctx = tensor_to_key(x[i])
+      local wi = y[i]
+      local p = ngrams[ctx][wi]
+      if p == nil then
+        unseen = unseen + 1
+        p = (1.0 / nwords) -- Uniform assumption
+      end
+      sum = sum + math.log(p)
+    end
+    local nll = (-1.0 / x:size(1)) * sum
+    print('Unseen ngrams: ' .. unseen)
+    return math.exp(nll)
+  end
+
+  print('Calculating perplexity on train...')
+  local perp = perplexity(train_x, train_y)
+  print('Training perplexity: ' .. perp)
+
+  print('Calculating perplexity on valid...')
+  perp = perplexity(valid_x, valid_y)
+  print('Validation perplexity: ' .. perp)
+
 end
 
 function main()
@@ -102,12 +127,10 @@ function main()
   valid_y = f:read('valid_output'):all()
   -- test_x = f:read('test_input'):all() TODO
 
-  if lm == 'nb' then
-    naive_bayes()
-  elseif lm == 'kn' then
-    print('kneser-ney smoothing')
+  if lm == 'cb' or lm == 'lap' or lm == 'wb' or lm == 'kn' then
+    count_based(lm)
   else
-    print('do something else')
+    print('Let\'s build some f*cking neural nets!')
     -- model(lm)
   end
 end
