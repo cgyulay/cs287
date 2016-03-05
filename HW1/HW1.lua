@@ -455,19 +455,8 @@ function main()
     logistic_regression('cross_entropy')
   elseif opt.classifier == 'lr-hinge' then
     logistic_regression('hinge')
-<<<<<<< HEAD
-  elseif opt.classifier == 'svm' then
-    linear_svm()
-  elseif opt.classifier == 'nn' then
-    multilayer_logistic_regression()
-  elseif opt.classifier =='kf-cross' then
-    kfolds_logistic('cross_entropy', kf) 
-  elseif opt.classifier =='kf-hinge' then
-    kfolds_logistic('hinge', kf)
-=======
   elseif opt.classifier =='kf' then
     kfolds_logistic('cross_entropy', 10)
->>>>>>> 7e04d6feaa4a4765ea2d8f5dad3b85e29ac9cd19
   end
   -- Test
 end

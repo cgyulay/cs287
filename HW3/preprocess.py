@@ -106,8 +106,7 @@ def main(arguments):
 
     f['nwords'] = np.array([V], dtype=np.int32)
     f['nclasses'] = np.array([C], dtype=np.int32)
-    f['ngram'] = np.array(ngram, dtype=np.int32)
-
+    f['ngram'] = np.array([ngram], dtype=np.int32)
 
 if __name__ == '__main__':
   sys.exit(main(sys.argv[1:]))

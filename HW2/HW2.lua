@@ -396,7 +396,7 @@ function model(structure)
   writeToFile(pred_idx)
 end
 
-function main() 
+function main()
   -- Parse input params
   opt = cmd:parse(arg)
   classifier = opt.classifier
