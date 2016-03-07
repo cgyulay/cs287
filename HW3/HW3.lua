@@ -28,7 +28,7 @@ end
 
 function count_based(smoothing)
   -- Specializd function for building unigram probability distribution (no context)
-  function build_unigram(x, y)
+  function build_unigram()
     local unigrams = {}
     for i = 1, train_y:size(1) do
       local wi = train_y[i]
@@ -38,18 +38,29 @@ function count_based(smoothing)
         unigrams[wi] = unigrams[wi] + 1
       end
     end
+
+    for wi, count in pairs(unigrams) do
+      unigrams[wi] = count / train_y:size(1)
+    end
+
     return unigrams
   end
 
   print('Building unigram distribution...')
   local unigram = build_unigram()
-
+  
+  -- Normalized probability distribution of unigrams
   function p_unigram(wi)
     p = unigram[wi]
     if p == nil then -- Never before seen unigram, go with uniform dist
       p = (1.0 / nwords)
     end
     return p
+  end
+
+  -- Raw frequency of unigrams in dataset
+  function freq_unigram(wi)
+    return p_unigram(wi) * train_y:size(1)
   end
 
   -- Create co-occurrence dictionary mapping contexts to following words
@@ -109,7 +120,7 @@ function count_based(smoothing)
     end
   end
 
-  function p_for_ngram(ngram, ctx, wi)
+  function p_ngram(ngram, ctx, wi)
     local ctxd = ngram[ctx]
     local p = 0
     if ctxd == nil then -- Never before seen context, go with unigram
@@ -161,7 +172,7 @@ function count_based(smoothing)
     for i = 1, x:size(1) do
       local ctx = tensor_to_key(x[i])
       local wi = y[i]
-      local p = p_for_ngram(ngram, ctx, wi)
+      local p = p_ngram(ngram, ctx, wi)
       
       sum = sum + math.log(p)
     end
@@ -180,10 +191,9 @@ function count_based(smoothing)
         local ctx2 = tensor_to_key(torch.Tensor({x[i][1]}))
         local wi = y[i]
 
-        unigram_freq = p_unigram(wi) * nwords -- Remultiply by nwords as it was previously normalized
         local l3, unq3, tot3, ctx_wi_freq3 = lambda_for_ctx(trigram, ctx3, wi)
         local l2, unq2, tot2, ctx_wi_freq2 = lambda_for_ctx(bigram, ctx2, wi)
-        local l1 = nwords / (nwords + unigram_freq)
+        local l1 = nwords / (nwords + freq_unigram(wi))
         local all = l3 + l2 + l1 -- Ensure lambdas form complex combination
         l3 = l3 / all
         l2 = l2 / all
@@ -199,9 +209,8 @@ function count_based(smoothing)
         local ctx = tensor_to_key(x[i])
         local wi = y[i]
 
-        unigram_freq = p_unigram(wi) * nwords
         local l2, unq2, tot2, ctx_wi_freq2 = lambda_for_ctx(bigram, ctx, wi)
-        local l1 = nwords / (nwords + unigram_freq)
+        local l1 = nwords / (nwords + freq_unigram(wi))
         local all = l2 + l1 -- Ensure lambdas form complex combination
         l2 = l2 / all
         l1 = l1 / all
