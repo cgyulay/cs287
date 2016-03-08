@@ -55,6 +55,7 @@ def build_ngrams(file_list, ngram):
             output[filename].append(out)
   return input_ngrams, output
 
+all_idx = []
 def build_word_dict(filename):
   last_idx = -1
   with codecs.open(filename, "r", encoding="latin-1") as f:
@@ -66,8 +67,9 @@ def build_word_dict(filename):
       word_to_idx[word] = idx
       word_freq[idx] = freq
       last_idx = idx
-  word_to_idx[START] = last_idx + 1
-  word_to_idx[END] = last_idx + 2
+      all_idx.append(idx)
+  word_to_idx[START] = last_idx + 1; all_idx.append(last_idx + 1)
+  word_to_idx[END] = last_idx + 2; all_idx.append(last_idx + 2)
 
 def main(arguments):
   global args
@@ -91,7 +93,7 @@ def main(arguments):
   valid_output = np.array(output_dict[valid], dtype=np.int32)
   # TODO: build contexts for test, but only for the ngram before the blank
 
-  V = len(word_to_idx)
+  V = max(all_idx)
   C = len(word_to_idx)
 
   filename = args.dataset + '_' + str(ngram) + 'gram.hdf5'
