@@ -302,7 +302,8 @@ function nnlm(structure)
 
   if structure == 'nn' then
     -- Lookup table concats embeddings for words in context
-    model:add(nn.LookupTable(nwords, embedding_size))
+    input_embedding = nn.LookupTable(nwords, embedding_size)
+    model:add(input_embedding)
     model:add(nn.Reshape(din))
 
     -- Linear, tanh, linear
@@ -320,7 +321,8 @@ function nnlm(structure)
     -- Parallel table to forward target directly to tree softmax module
     local para = nn.ParallelTable()
     local inp = nn.Sequential()
-    inp:add(nn.LookupTable(nwords, embedding_size))
+    input_embedding = nn.LookupTable(nwords, embedding_size)
+    inp:add(input_embedding)
     inp:add(nn.Reshape(din))
     inp:add(nn.Linear(din, dhid))
     inp:add(nn.Tanh())
@@ -431,6 +433,10 @@ function nnlm(structure)
       -- optim.adagrad(run_minibatch, params, options)
       -- optim.rmsprop(run_minibatch, params, options) -- Slower
     end
+
+    -- Renormalize input embeddings after each epoch (max l2 norm = 1)
+    local threshold = 1
+    input_embedding.weight:renorm(2, 2, threshold)
   end
 
   function test(x, y)
@@ -445,6 +451,9 @@ function nnlm(structure)
 
   function hsm_perp(x, y)
     local preds = model:forward({x, y})
+    -- Each pred is the likelihood of a leaf class (y)
+    -- To generate distribution need to provide all desired
+    -- classes and renormalize
     local loss = nll:forward(preds, y)
     local perp = math.exp(loss)
 
@@ -452,11 +461,7 @@ function nnlm(structure)
   end
 
   function valid_acc()
-    if structure == 'nn' then
-      return test(valid_x, valid_y)
-    elseif structure == 'hsm' then
-      return test({valid_x, valid_y}, valid_y)
-    end
+    return test(valid_x, valid_y)
   end
 
   function train_acc()

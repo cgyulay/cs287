@@ -14,6 +14,7 @@ import codecs
 
 START = '<s>'
 END = '</s>'
+UNKNOWN = '<unk>'
 
 FILE_PATHS = {"PTB": ("data/train.txt",
               "data/valid.txt",
@@ -38,7 +39,7 @@ def build_ngrams(file_list, ngram):
         print('Building ngrams from ' + filename + '...')
 
         iterlines = iter(f)
-        next(iterlines) # Skip first line because it's nonsense
+        next(iterlines) # Skip first line because it's utter nonsense
         for line in iterlines:
           words = [word_to_idx[str(w)] for w in line.split()]
 
@@ -53,6 +54,38 @@ def build_ngrams(file_list, ngram):
             out = context[-1]
             input_ngrams[filename].append(inp)
             output[filename].append(out)
+  return input_ngrams, output
+
+def build_test_ngrams(filename, ngram):
+  input_ngrams = []
+  output = []
+  if filename:
+    with codecs.open(filename, "r", encoding="latin-1") as f:
+      print('Building ngrams from ' + filename + '...')
+      while True:
+        dist = str(f.readline()).split()[1:]
+        words = str(f.readline()).split()[1:-1]
+        if len(dist) == 0: break # eof
+
+        # Replace unseen words with unknown tag
+        for i in range(len(dist)):
+          if dist[i] not in word_to_idx:
+            dist[i] = UNKNOWN
+        for i in range(len(words)):
+          if words[i] not in word_to_idx:
+            words[i] = UNKNOWN
+
+        # Convert to indexes
+        dist = [word_to_idx[w] for w in dist]
+        words = [word_to_idx[w] for w in words]
+
+        # Padding
+        start = [word_to_idx[START]] * (ngram - 1)
+        words = start + words
+        inp = words[-ngram+1:]
+        
+        input_ngrams.append(inp)
+        output.append(dist)
   return input_ngrams, output
 
 all_idx = []
@@ -91,9 +124,13 @@ def main(arguments):
   train_output = np.array(output_dict[train], dtype=np.int32)
   valid_input = np.array(input_dict[valid], dtype=np.int32)
   valid_output = np.array(output_dict[valid], dtype=np.int32)
-  # TODO: build contexts for test, but only for the ngram before the blank
+  
+  test_input, test_output = build_test_ngrams(test, ngram)
+  test_input = np.array(test_input, dtype=np.int32)
+  test_output = np.array(test_output, dtype=np.int32)
 
   V = max(all_idx)
+  # V = len(word_to_idx)
   C = len(word_to_idx)
 
   filename = args.dataset + '_' + str(ngram) + 'gram.hdf5'
@@ -103,8 +140,9 @@ def main(arguments):
     if valid:
       f['valid_input'] = valid_input
       f['valid_output'] = valid_output
-    # if test:
-      # f['test_input'] = test_input
+    if test:
+      f['test_input'] = test_input
+      f['test_output'] = test_output
 
     f['nwords'] = np.array([V], dtype=np.int32)
     f['nclasses'] = np.array([C], dtype=np.int32)
