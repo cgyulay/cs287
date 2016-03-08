@@ -317,26 +317,6 @@ function nnlm(structure)
   elseif structure == 'hsm' then
     build_softmaxtree()
 
-    -- Shim to forward target to softmax tree
-    -- local push = nn.PushTable(2)
-    -- local pull = push:pull(2)
-
-    -- model:add(push)
-    -- model:add(nn.SelectTable(1))
-
-    -- -- Lookup table concats embeddings for words in context
-    -- model:add(nn.LookupTable(nwords, embedding_size))
-    -- model:add(nn.Reshape(din))
-
-    -- -- Linear, tanh, linear
-    -- model:add(nn.Linear(din, dhid))
-    -- model:add(nn.Tanh())
-    -- model:add(nn.Linear(dhid, dout))
-
-    -- model:add(pull)
-    -- model:add(nn.SoftMaxTree(dout, hierarchy, 1)) -- log-softmax tree
-    -- nll = nn.TreeNLLCriterion()
-
     -- Parallel table to forward target directly to tree softmax module
     local para = nn.ParallelTable()
     local inp = nn.Sequential()
