@@ -272,7 +272,7 @@ function nnlm(structure)
   local dhid = 100
   local dout = nwords
 
-  print('\nBuilding neural language model with hyperparameters...')
+  print('\nBuilding neural language model with hyperparameters:')
   print('Learning rate (eta): ' .. eta)
   print('Number of epochs (nepochs): ' .. n_epochs)
   print('Mini-batch size (mb): ' .. batch_size)
@@ -491,24 +491,26 @@ function nnlm(structure)
 
     -- vloss[i] = vl
     -- tloss[i] = tl
-    -- vacc[i] = va
+    vacc[i] = vp
     -- tacc[i] = ta
     etime[i] = timer:time().real
 
     print('Epoch ' .. i .. ' training completed in ' .. timer:time().real .. ' seconds.')
     print('Validation perplexity after epoch ' .. i .. ': ' .. vp .. '.')
-
-    -- local flr = torch.DiskFile('training_output/lrepoch=' .. i .. '.txt', 'w')
-    -- for j = 1, i do
-    --   flr:writeString(vacc[j] .. ',' .. tacc[j] .. ',' .. vloss[j] .. ','  .. tloss[j] .. ','  .. etime[j] .. '\n')
-    -- end
-    -- flr:close()
   end
+
+  local flr = torch.DiskFile('training_output/model=' .. lm .. ',dataset=' .. datafile .. '.txt', 'w')
+  for j = 1, n_epochs do
+    -- flr:writeString(vacc[j] .. ',' .. tacc[j] .. ',' .. vloss[j] .. ','  .. tloss[j] .. ','  .. etime[j] .. '\n')
+    flr:writeString(vacc[j] .. ','  .. etime[j] .. '\n')
+  end
+  flr:close()
 end
 
 function main()
   -- Parse input params
   opt = cmd:parse(arg)
+  datafile = opt.datafile
   lm = opt.lm
   alpha = opt.alpha
   eta = opt.eta
@@ -527,7 +529,8 @@ function main()
   train_y = f:read('train_output'):all()
   valid_x = f:read('valid_input'):all()
   valid_y = f:read('valid_output'):all()
-  -- test_x = f:read('test_input'):all() TODO
+  test_x = f:read('test_input'):all()
+  test_dist = f:read('test_output'):all()
 
   -- Format datasets for Witten-Bell
   if lm == 'wb' then
