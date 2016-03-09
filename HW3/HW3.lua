@@ -3,8 +3,9 @@ require("hdf5")
 require("optim")
 require("nn")
 require("nnx")
--- require("cunn")
--- require("cutorch")
+require("cunn")
+require("cutorch")
+require("cudnn")
 
 cmd = torch.CmdLine()
 
@@ -12,12 +13,13 @@ UNSEEN = -1
 
 -- Cmd Args
 cmd:option('-datafile', '', 'data file')
-cmd:option('-lm', 'nb', 'classifier to use')
+cmd:option('-lm', 'nn', 'classifier to use')
 cmd:option('-alpha', 0.01, 'Laplace smoothing coefficient')
 cmd:option('-eta', 0.01, 'learning rate')
 cmd:option('-nepochs', 3, 'number of training epochs')
 cmd:option('-mb', 32, 'minibatch size')
 cmd:option('-k', 1, 'ratio of noise for NCE')
+cmd:option('-gpu', 0, 'whether to use gpu for training')
 
 -- Helper function which converts a tensor to a key for table lookup
 function tensor_to_key(t)
@@ -128,6 +130,7 @@ function count_based(smoothing)
     local p = 0
     if ctxd == nil then -- Never before seen context, go with unigram
       p = p_unigram(wi)
+      -- p = (1 / nwords)
     else
       p = ngram[ctx][wi]
       if p == nil then -- We've seen this context before, just not this wi
@@ -281,7 +284,7 @@ function nnlm(structure)
   print('Vocabulary size (|V|): ' .. nwords)
 
   -- For hierarchical softmax
-  function build_softmaxtree()
+  function build_softmax_tree()
     hierarchy = {}
     n_buckets = math.ceil(math.sqrt(nwords))
     
@@ -302,9 +305,13 @@ function nnlm(structure)
 
   if structure == 'nn' then
     -- Lookup table concats embeddings for words in context
-    input_embedding = nn.LookupTable(nwords, embedding_size)
-    model:add(input_embedding)
-    model:add(nn.Reshape(din))
+    -- input_embedding = nn.LookupTable(nwords, embedding_size)
+    -- input_embedding.weight:cuda()
+    -- print(input_embedding.weight)
+    -- model:add(input_embedding)
+    model:add(nn.LookupTable(nwords, embedding_size))
+    -- model:add(nn.Reshape(din))
+    model:add(nn.View(din))
 
     -- Linear, tanh, linear
     model:add(nn.Linear(din, dhid))
@@ -313,10 +320,14 @@ function nnlm(structure)
 
     model:add(nn.LogSoftMax())
     nll = nn.ClassNLLCriterion()
-    -- model:cuda()
     print('Using softmax output.')
+    if gpu == 1 then
+      model:cuda()
+      nll = nll:cuda()
+      print('Using gpu accelerated training.')
+    end
   elseif structure == 'hsm' then
-    build_softmaxtree()
+    build_softmax_tree()
 
     -- Parallel table to forward target directly to tree softmax module
     local para = nn.ParallelTable()
@@ -360,6 +371,10 @@ function nnlm(structure)
   end
 
   params, gradParams = model:getParameters()
+  if gpu == 1 then
+    params = params:cuda()
+    gradParams = gradParams:cuda()
+  end
 
   function p_noise_sample()
     return k / (k + 1)
@@ -378,12 +393,17 @@ function nnlm(structure)
 
     print('\nBeginning epoch ' .. e .. ' training: ' .. n_train_batches .. ' minibatches of size ' .. batch_size .. '.')
     for i = 1, n_train_batches do
-      local batch_start = torch.random(i*batch_size+1, (i+1)*batch_size)
+      local batch_start = torch.random(i * batch_size + 1, (i + 1) * batch_size)
       local batch_end = math.min((batch_start + batch_size - 1), order:size(1))
 
       curr_batch = order[{{batch_start, batch_end}}]:long()
       local x = train_x:index(1, curr_batch)
       local y = train_y:index(1, curr_batch)
+
+      if gpu == 1 then
+        x = x:cuda()
+        y = y:cuda()
+      end
 
       -- Compute forward and backward pass (predictions + gradient updates)
       function run_minibatch(p)
@@ -393,6 +413,7 @@ function nnlm(structure)
 
         -- Accumulate gradients from scratch each minibatch
         gradParams:zero()
+        local loss = 0
 
         if structure == 'nn' then
           -- Forward pass
@@ -435,18 +456,21 @@ function nnlm(structure)
     end
 
     -- Renormalize input embeddings after each epoch (max l2 norm = 1)
-    local threshold = 1
-    input_embedding.weight:renorm(2, 2, threshold)
+    -- local threshold = 1
+    -- input_embedding.weight:renorm(2, 2, threshold):cuda()
   end
 
   function test(x, y)
     local preds = model:forward(x)
     local loss = nll:forward(preds, y)
     local perp = math.exp(loss)
-    local max, yhat = preds:max(2)
-    
-    local correct = yhat:int():eq(y):double():mean() * 100
-    return correct, loss, perp
+    if structure == 'nn' then
+      local max, yhat = preds:max(2)
+      local correct = yhat:int():eq(y):double():mean() * 100
+      return correct, loss, perp
+    else
+      return 0, 0, perp
+    end
   end
 
   function hsm_perp(x, y)
@@ -461,15 +485,44 @@ function nnlm(structure)
   end
 
   function valid_acc()
-    return test(valid_x, valid_y)
+    if gpu == 0 then
+      return test(valid_x, valid_y)
+    else
+      return test(valid_x:cuda(), valid_y:cuda())
+    end
   end
 
   function train_acc()
     return test(train_x, train_y)
   end
 
-  if structure == 'nn' then  inita, initl, initp = valid_acc()
-  elseif structure == 'hsm' then initp = hsm_perp(valid_x, valid_y) end
+  function predict_kaggle()
+    local fl = torch.DiskFile('training_output/predictions_model=' .. lm .. ',dataset=' .. datafile .. '.txt', 'w')
+    fl:writeString('ID') -- Header row
+    for i = 1, test_dist[1]:size(1) do
+      fl:writeString(',Class' .. i)
+    end
+
+    local preds = model:forward(test_x)
+    for i = 1, preds:size(1) do
+      local targets = test_dist[i]
+      local i_preds = torch.Tensor(targets:size(1))
+      for j = 1, targets:size(1) do
+        i_preds[j] = preds[i][targets[j]]
+      end
+      i_preds = i_preds / i_preds:sum()
+      
+      fl:writeString(tostring(i))
+      for j = 1, i_preds:size(1) do
+        fl:writeString(',' .. i_preds[j])
+      end
+      fl:writeString('\n')
+    end
+
+    fl:close()
+  end
+
+  local inita, initl, initp = valid_acc()
   print('Validation perplexity before training: ' .. initp .. '.')
   print('Beginning training...')
   local vloss = torch.DoubleTensor(n_epochs) -- valid/train loss/accuracy/time
@@ -482,12 +535,8 @@ function nnlm(structure)
     local timer = torch.Timer()
     train(i)
 
-    if structure == 'nn' then
-      va, vl, vp = valid_acc()
-    elseif structure == 'hsm' then
-      vp = hsm_perp(valid_x, valid_y)
-    end
-    -- local ta, tl = train_acc()
+    local va, vl, vp = valid_acc()
+    -- local ta, tl, tp = train_acc()
 
     -- vloss[i] = vl
     -- tloss[i] = tl
@@ -499,12 +548,16 @@ function nnlm(structure)
     print('Validation perplexity after epoch ' .. i .. ': ' .. vp .. '.')
   end
 
+  -- Logging
   local flr = torch.DiskFile('training_output/model=' .. lm .. ',dataset=' .. datafile .. '.txt', 'w')
   for j = 1, n_epochs do
     -- flr:writeString(vacc[j] .. ',' .. tacc[j] .. ',' .. vloss[j] .. ','  .. tloss[j] .. ','  .. etime[j] .. '\n')
     flr:writeString(vacc[j] .. ','  .. etime[j] .. '\n')
   end
   flr:close()
+
+  -- Kaggle predictions
+  predict_kaggle()
 end
 
 function main()
@@ -517,6 +570,7 @@ function main()
   n_epochs = opt.nepochs
   batch_size = opt.mb
   k = opt.k
+  gpu = opt.gpu
 
   local f = hdf5.open(opt.datafile, 'r')
   nwords = f:read('nwords'):all():long()[1]

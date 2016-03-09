@@ -1,0 +1,7 @@
+ssh
+ssh -i "coltongyulay.pem" ubuntu@ec2-54-174-201-165.compute-1.amazonaws.com
+
+scp to server
+scp -r -i Users/coltongyulay/Developer/cs287/HW3/ami/coltongyulay.pem /Users/coltongyulay/Developer/cs287/HW3  ubuntu@ec2-54-174-201-165.compute-1.amazonaws.com:/home/ubuntu/projects
+
+th HW3.lua -datafile PTB1000_6gram.hdf5 -lm nn -gpu 1
