@@ -5,7 +5,7 @@ require("nn")
 require("nnx")
 require("cunn")
 require("cutorch")
-require("cudnn")
+-- require("cudnn")
 
 cmd = torch.CmdLine()
 
@@ -15,7 +15,7 @@ UNSEEN = -1
 cmd:option('-datafile', '', 'data file')
 cmd:option('-lm', 'nn', 'classifier to use')
 cmd:option('-alpha', 0.01, 'Laplace smoothing coefficient')
-cmd:option('-eta', 0.01, 'learning rate')
+cmd:option('-eta', 0.04, 'learning rate')
 cmd:option('-nepochs', 3, 'number of training epochs')
 cmd:option('-mb', 32, 'minibatch size')
 cmd:option('-k', 1, 'ratio of noise for NCE')
@@ -305,11 +305,11 @@ function nnlm(structure)
 
   if structure == 'nn' then
     -- Lookup table concats embeddings for words in context
-    -- input_embedding = nn.LookupTable(nwords, embedding_size)
+    input_embedding = nn.LookupTable(nwords, embedding_size)
     -- input_embedding.weight:cuda()
     -- print(input_embedding.weight)
-    -- model:add(input_embedding)
-    model:add(nn.LookupTable(nwords, embedding_size))
+    model:add(input_embedding)
+    -- model:add(nn.LookupTable(nwords, embedding_size))
     -- model:add(nn.Reshape(din))
     model:add(nn.View(din))
 
@@ -456,8 +456,8 @@ function nnlm(structure)
     end
 
     -- Renormalize input embeddings after each epoch (max l2 norm = 1)
-    -- local threshold = 1
-    -- input_embedding.weight:renorm(2, 2, threshold):cuda()
+    local threshold = 1
+    input_embedding.weight:renorm(2, 2, threshold):cuda()
   end
 
   function test(x, y)
@@ -541,7 +541,7 @@ function nnlm(structure)
     -- vloss[i] = vl
     -- tloss[i] = tl
     vacc[i] = vp
-    -- tacc[i] = ta
+    -- tacc[i] = tp
     etime[i] = timer:time().real
 
     print('Epoch ' .. i .. ' training completed in ' .. timer:time().real .. ' seconds.')
@@ -552,12 +552,21 @@ function nnlm(structure)
   local flr = torch.DiskFile('training_output/model=' .. lm .. ',dataset=' .. datafile .. '.txt', 'w')
   for j = 1, n_epochs do
     -- flr:writeString(vacc[j] .. ',' .. tacc[j] .. ',' .. vloss[j] .. ','  .. tloss[j] .. ','  .. etime[j] .. '\n')
+    -- flr:writeString(tacc[j] .. ',' .. vacc[j] .. ','  .. etime[j] .. '\n')
     flr:writeString(vacc[j] .. ','  .. etime[j] .. '\n')
   end
   flr:close()
 
   -- Kaggle predictions
   predict_kaggle()
+
+  -- Export lookup table weights
+  local f = hdf5.open('embed_export.hdf5', 'w')
+  f:write('/embed', input_embedding.weight)
+  f:close()
+
+  local ta, tl, tp = train_acc()
+  print('Final training perplexity after all epochs: ' .. tp)
 end
 
 function main()
