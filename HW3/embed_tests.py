@@ -40,11 +40,13 @@ def word_to_embed(w):
     return idx_to_embed[word_to_idx[w]]
   return None
 
+k = 8
 # Find k nearest neighbors by cosine or dot
 # Cosine similarity ignores magnitude, only relies on angle difference
 # Dot product accounts for both magnitude and angle (may not matter too much
 # in our embeddings due to max l2 norm = 1)
-target = word_to_embed('company')
+tword = 'germany'
+target = word_to_embed(tword)
 comps = []
 for i, e in enumerate(embeddings):
   # NB: need i+1
@@ -55,5 +57,9 @@ for i, e in enumerate(embeddings):
 sorted_by_dot = sorted(comps, key=lambda tup: tup[1])
 sorted_by_dot.reverse()
 
-for i in range(10):
-  print(idx_to_word[sorted_by_dot[i][0]], sorted_by_dot[i][1])
+examples = ''
+for i in range(1,k): # skip closest word as it is itself
+  word = idx_to_word[sorted_by_dot[i][0]]
+  score = '%.3f' % sorted_by_dot[i][1] 
+  examples = examples + word + ' (' + score + '), '
+print(tword + ': ' + examples[:-2])

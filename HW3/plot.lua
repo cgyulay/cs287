@@ -1,12 +1,12 @@
 require("gnuplot")
 require("math")
 
-function plot(one, two, three, title, xlabel, ylabel, filename)
+function plot(one, two, title, xlabel, ylabel, filename)
   -- NB: requires gnuplot
   gnuplot.pngfigure('img/' .. filename .. '.png')
   -- gnuplot.raw('set logscale x 10')
-  gnuplot.plot({'eta=0.4, e=30', one}, {'eta=0.01, e=30', two}, {'eta=0.01, e=50', three})
-  -- gnuplot.plot({'Train', one}, {'Valid', two})
+  -- gnuplot.plot({'eta=0.4, e=30', one}, {'eta=0.01, e=30', two}, {'eta=0.01, e=50', three})
+  gnuplot.plot({'NNLM', one}, {'NNLMHSM', two})
   -- gnuplot.plot(one)
   gnuplot.title(title)
   gnuplot.xlabel(xlabel)
@@ -97,15 +97,15 @@ function accuracyforfile(filename)
   return acc
 end
 
-local o1 = torch.DoubleTensor({{0.0001, 68.67}, {0.001, 73.77}, {0.01, 101.17}, {0.1, 216.82}, {1, 682.63}})
-local o2 = torch.DoubleTensor({{0.0001, 506.65}, {0.001, 343.40}, {0.01, 294.94}, {0.1, 395.94}, {1, 846.90}})
+-- local o1 = torch.DoubleTensor({{0.0001, 68.67}, {0.001, 73.77}, {0.01, 101.17}, {0.1, 216.82}, {1, 682.63}})
+-- local o2 = torch.DoubleTensor({{0.0001, 506.65}, {0.001, 343.40}, {0.01, 294.94}, {0.1, 395.94}, {1, 846.90}})
 -- plot(o1, o2, 'Tuning Alpha Smoothing Constant for CBLap', 'Alpha', 'Perp', 'laptune')
 
-o1 = accuracyforfile('training_output/model=nn,dataset=PTB_6gram.hdf5_lr=0.01.txt')
-o2 = accuracyforfile('training_output/model=nn,dataset=PTB_6gram.hdf5,lr=0.04.txt')
-o3 = accuracyforfile('training_output/epoch=15,model=nn,dataset=PTB_6gram.hdf5.txt')
+o1 = accuracyforfile('training_output/15model=nn,dataset=PTB1000_6gram.hdf5.txt')
+o2 = accuracyforfile('training_output/epoch=15,model=hsm,dataset=PTB1000_6gram.hdf5,lr=0.01.txt')
+-- o3 = accuracyforfile('training_output/epoch=15,model=nn,dataset=PTB_6gram.hdf5.txt')
 -- o4 = accuracyforfile('training_output/mlptest_pretrainedembed_eta=0.04.txt')
 -- o4 = accuracyforfile('training_output/mlptest_pretrainedembed_eta=0.05.txt')
 -- o1 = accuracyforfile('training_output/mlp_vanilla_test_eta=0.01.txt')
 
-plot(o1, o2, o3, 'NNLM Comparison', 'Epochs', 'Perp', 'nnlmcomp')
+plot(o1, o2, 'NNLM vs NNLMHSM on PTB1000', 'Epochs', 'Perp', 'nnlmcomp1000')
