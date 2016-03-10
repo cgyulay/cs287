@@ -1,5 +1,5 @@
 
-from sklearn.neighbors import NearestNeighbors
+from scipy import spatial
 import numpy as np
 import h5py
 import codecs
@@ -8,8 +8,7 @@ START = '<s>'
 END = '</s>'
 UNKNOWN = '<unk>'
 
-# f = h5py.File('embed_export.hdf5', 'r')
-f = h5py.File('embed.hdf5', 'r')
+f = h5py.File('embed_export1.hdf5', 'r')
 embeddings = f['embed'][...]
 
 # Map word indexes to embeddings
@@ -45,13 +44,16 @@ def word_to_embed(w):
 # Cosine similarity ignores magnitude, only relies on angle difference
 # Dot product accounts for both magnitude and angle (may not matter too much
 # in our embeddings due to max l2 norm = 1)
-target = word_to_embed('london')
-largest_dot_idx = -1
-largest_dot = -1
+target = word_to_embed('company')
+comps = []
 for i, e in enumerate(embeddings):
   # NB: need i+1
-  dot = np.dot(target, e)
-  if dot > largest_dot:
-    largest_dot_idx = i + 1
-    largest_dot = dot
-print(idx_to_word[largest_dot_idx])
+  # dot = np.dot(target, e)
+  sim = 1 - spatial.distance.cosine(target, e)
+  comps.append((i+1, sim))
+  
+sorted_by_dot = sorted(comps, key=lambda tup: tup[1])
+sorted_by_dot.reverse()
+
+for i in range(10):
+  print(idx_to_word[sorted_by_dot[i][0]], sorted_by_dot[i][1])

@@ -15,7 +15,7 @@ UNSEEN = -1
 cmd:option('-datafile', '', 'data file')
 cmd:option('-lm', 'nn', 'classifier to use')
 cmd:option('-alpha', 0.01, 'Laplace smoothing coefficient')
-cmd:option('-eta', 0.04, 'learning rate')
+cmd:option('-eta', 0.01, 'learning rate')
 cmd:option('-nepochs', 3, 'number of training epochs')
 cmd:option('-mb', 32, 'minibatch size')
 cmd:option('-k', 1, 'ratio of noise for NCE')
@@ -270,7 +270,7 @@ function count_based(smoothing)
 end
 
 function nnlm(structure)
-  local embedding_size = 30
+  local embedding_size = 50
   local din = embedding_size * dwin
   local dhid = 100
   local dout = nwords
@@ -485,7 +485,9 @@ function nnlm(structure)
   end
 
   function valid_acc()
-    if gpu == 0 then
+    if structure == 'hsm' then
+      return test({valid_x, valid_y}, valid_y)
+    elseif gpu == 0 then
       return test(valid_x, valid_y)
     else
       return test(valid_x:cuda(), valid_y:cuda())
@@ -493,7 +495,11 @@ function nnlm(structure)
   end
 
   function train_acc()
-    return test(train_x, train_y)
+    if structure == 'hsm' then
+      return test({train_x, train_y}, train_y)
+    else
+      return test(train_x, train_y)
+    end
   end
 
   function predict_kaggle()
@@ -546,22 +552,22 @@ function nnlm(structure)
 
     print('Epoch ' .. i .. ' training completed in ' .. timer:time().real .. ' seconds.')
     print('Validation perplexity after epoch ' .. i .. ': ' .. vp .. '.')
-  end
 
-  -- Logging
-  local flr = torch.DiskFile('training_output/model=' .. lm .. ',dataset=' .. datafile .. '.txt', 'w')
-  for j = 1, n_epochs do
-    -- flr:writeString(vacc[j] .. ',' .. tacc[j] .. ',' .. vloss[j] .. ','  .. tloss[j] .. ','  .. etime[j] .. '\n')
-    -- flr:writeString(tacc[j] .. ',' .. vacc[j] .. ','  .. etime[j] .. '\n')
-    flr:writeString(vacc[j] .. ','  .. etime[j] .. '\n')
+    -- Logging
+    local flr = torch.DiskFile('training_output/epoch=' .. i .. ',model=' .. lm .. ',dataset=' .. datafile .. '.txt', 'w')
+    for j = 1, i do
+      -- flr:writeString(vacc[j] .. ',' .. tacc[j] .. ',' .. vloss[j] .. ','  .. tloss[j] .. ','  .. etime[j] .. '\n')
+      -- flr:writeString(tacc[j] .. ',' .. vacc[j] .. ','  .. etime[j] .. '\n')
+      flr:writeString(vacc[j] .. ','  .. etime[j] .. '\n')
+    end
+    flr:close()
   end
-  flr:close()
 
   -- Kaggle predictions
   predict_kaggle()
 
   -- Export lookup table weights
-  local f = hdf5.open('embed_export.hdf5', 'w')
+  local f = hdf5.open('embed_export50.hdf5', 'w')
   f:write('/embed', input_embedding.weight)
   f:close()
 
