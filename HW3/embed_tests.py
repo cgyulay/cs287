@@ -1,4 +1,7 @@
-
+from time import time
+import matplotlib.pyplot as plt
+from matplotlib import offsetbox
+from sklearn import (manifold, datasets, decomposition, ensemble, random_projection)
 from scipy import spatial
 import numpy as np
 import h5py
@@ -58,7 +61,7 @@ sorted_by_dot = sorted(comps, key=lambda tup: tup[1])
 sorted_by_dot.reverse()
 
 examples = ''
-for i in range(1,k): # skip closest word as it is itself
+for i in range(1, k): # skip closest word as it is itself
   word = idx_to_word[sorted_by_dot[i][0]]
   score = '%.3f' % sorted_by_dot[i][1] 
   examples = examples + word + ' (' + score + '), '

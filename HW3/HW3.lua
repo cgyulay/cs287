@@ -15,7 +15,7 @@ UNSEEN = -1
 cmd:option('-datafile', '', 'data file')
 cmd:option('-lm', 'nn', 'classifier to use')
 cmd:option('-alpha', 0.01, 'Laplace smoothing coefficient')
-cmd:option('-eta', 0.01, 'learning rate')
+cmd:option('-eta', 0.05, 'learning rate')
 cmd:option('-nepochs', 3, 'number of training epochs')
 cmd:option('-mb', 32, 'minibatch size')
 cmd:option('-k', 1, 'ratio of noise for NCE')
@@ -286,12 +286,19 @@ function nnlm(structure)
   -- For hierarchical softmax
   function build_softmax_tree()
     hierarchy = {}
-    n_buckets = math.ceil(math.sqrt(nwords))
+    -- n_buckets = math.ceil(math.sqrt(nwords))
     
     -- Randomly sort words into two layer tree
+    -- for i = 1, n_buckets do
+    --   local words = torch.range((i - 1) * n_buckets + 1, i * n_buckets):int()
+    --   hierarchy[i] = words
+    -- end
+
+    n_buckets = math.ceil(math.sqrt(nwords))
+    root = n_buckets + 1
+    hierarchy[root] = torch.IntTensor{nwords + 1, 1, 2}
     for i = 1, n_buckets do
-      local words = torch.range((i - 1) * n_buckets + 1, i * n_buckets):int()
-      hierarchy[i] = words
+      hierarchy[i] = torch.range((i - 1) * n_buckets + 3, i * n_buckets + 2):int()
     end
 
     return hierarchy
@@ -306,11 +313,7 @@ function nnlm(structure)
   if structure == 'nn' then
     -- Lookup table concats embeddings for words in context
     input_embedding = nn.LookupTable(nwords, embedding_size)
-    -- input_embedding.weight:cuda()
-    -- print(input_embedding.weight)
     model:add(input_embedding)
-    -- model:add(nn.LookupTable(nwords, embedding_size))
-    -- model:add(nn.Reshape(din))
     model:add(nn.View(din))
 
     -- Linear, tanh, linear
@@ -334,17 +337,16 @@ function nnlm(structure)
     local inp = nn.Sequential()
     input_embedding = nn.LookupTable(nwords, embedding_size)
     inp:add(input_embedding)
-    inp:add(nn.Reshape(din))
+    inp:add(nn.View(din))
     inp:add(nn.Linear(din, dhid))
-    inp:add(nn.Tanh())
-    inp:add(nn.Linear(dhid, dout))
+    inp:add(nn.HardTanh())
     local out = nn.Identity()
 
     para:add(inp)
     para:add(out)
     model:add(para)
 
-    model:add(nn.SoftMaxTree(dout, hierarchy, 1))
+    model:add(nn.SoftMaxTree(dhid, hierarchy, root, false, true, true))
     nll = nn.TreeNLLCriterion()
     print('Using hierarchical softmax output.')
   elseif structure == 'nce' then
@@ -374,14 +376,6 @@ function nnlm(structure)
   if gpu == 1 then
     params = params:cuda()
     gradParams = gradParams:cuda()
-  end
-
-  function p_noise_sample()
-    return k / (k + 1)
-  end
-
-  function p_true_sample()
-    return 1 / (k + 1)
   end
 
   function train(e)
@@ -450,14 +444,15 @@ function nnlm(structure)
       }
 
       -- Use optim package for minibatch sgd
+      collectgarbage()
       optim.sgd(run_minibatch, params, options)
       -- optim.adagrad(run_minibatch, params, options)
       -- optim.rmsprop(run_minibatch, params, options) -- Slower
     end
 
     -- Renormalize input embeddings after each epoch (max l2 norm = 1)
-    local threshold = 1
-    input_embedding.weight:renorm(2, 2, threshold):cuda()
+    -- local threshold = 1
+    -- input_embedding.weight:renorm(2, 2, threshold):cuda()
   end
 
   function test(x, y)
@@ -474,10 +469,10 @@ function nnlm(structure)
   end
 
   function hsm_perp(x, y)
-    local preds = model:forward({x, y})
     -- Each pred is the likelihood of a leaf class (y)
     -- To generate distribution need to provide all desired
     -- classes and renormalize
+    local preds = model:forward({x, y})
     local loss = nll:forward(preds, y)
     local perp = math.exp(loss)
 
@@ -486,7 +481,8 @@ function nnlm(structure)
 
   function valid_acc()
     if structure == 'hsm' then
-      return test({valid_x, valid_y}, valid_y)
+      -- return test({valid_x, valid_y}, valid_y)
+      return 0, 0, hsm_perp(valid_x, valid_y)
     elseif gpu == 0 then
       return test(valid_x, valid_y)
     else
@@ -503,11 +499,12 @@ function nnlm(structure)
   end
 
   function predict_kaggle()
-    local fl = torch.DiskFile('training_output/predictions_model=' .. lm .. ',dataset=' .. datafile .. '.txt', 'w')
+    local fl = torch.DiskFile('training_output/newest_predictions_model=' .. lm .. ',dataset=' .. datafile .. '.txt', 'w')
     fl:writeString('ID') -- Header row
     for i = 1, test_dist[1]:size(1) do
       fl:writeString(',Class' .. i)
     end
+    fl:writeString('\n')
 
     local preds = model:forward(test_x)
     for i = 1, preds:size(1) do
@@ -567,7 +564,7 @@ function nnlm(structure)
   predict_kaggle()
 
   -- Export lookup table weights
-  local f = hdf5.open('embed_export50.hdf5', 'w')
+  local f = hdf5.open('embed_export50_hsm.hdf5', 'w')
   f:write('/embed', input_embedding.weight)
   f:close()
 
