@@ -17,36 +17,50 @@ FILE_PATHS = {"PTB": ("data/train_chars.txt",
               "data/valid_chars_kaggle.txt",
               "data/test_chars.txt")}
 args = {}
-word_to_idx = {}
+char_to_idx = {}
 
 # For train/valid datasets
-def build_ngrams(file_list, ngram):
-  input_ngrams = {}
-  output = {} # 0 or 1 depending on presence of space or not
+def build_indices(file_list, seq_len):
+  inp = {}
+  out = {}
   for filename in file_list:
     if filename:
-      input_ngrams[filename] = []
-      output[filename] = []
       with codecs.open(filename, "r", encoding="latin-1") as f:
-        print('Building ngrams from ' + filename + '...')
+        print('Converting ' + filename + ' to indices...')
+        lines = f.readlines()
+        if len(lines) == 1: # Train or valid
+          chars = [char_to_idx[str(c)] for c in lines[0].split()]
+          spaces = [int(c == 1) for c in chars] # 0 or 1 depending on presence of space or not
+          inp[filename] = chars
+          out[filename] = spaces[1:] + [0] # Offset by 1 as _next_ char is label
+        else: # Valid kaggle or test
+          inp_arr = []
+          out_arr = []
 
-        for line in f:
-          words = [word_to_idx[str(w)] for w in line.split()]
-          start = [word_to_idx[START]] * (ngram - 1)
-          words = start + words
-          
-          for i in xrange(ngram, len(words)+1):
-            context = words[i-ngram:i]
-            inp = context[:-1]
-            out = int(context[-1] == word_to_idx[SPACE]) # 1 = space, 0 ow
-            input_ngrams[filename].append(inp)
-            output[filename].append(out)
-  return input_ngrams, output
+          # Find longest example and standardize length to max
+          longest = 0
+          for line in lines:
+            l = len(line.split())
+            if l > longest: longest = l
 
-def build_word_dict(file_list):
+          for line in lines:
+            chars = [char_to_idx[str(c)] for c in line.split()]
+            nspaces = chars.count(1)
+            chars = [c for c in chars if c != 1] # Remove spaces
+
+            # Standardize length with padding
+            chars = chars + [char_to_idx['</s>']] * (longest - len(chars))
+            inp_arr.append(chars)
+            out_arr.append(nspaces)
+
+          inp[filename] = inp_arr
+          out[filename] = out_arr
+  return inp, out
+
+def build_char_dict(file_list):
   last_idx = 3
-  word_to_idx[SPACE] = 1
-  word_to_idx[START] = 2
+  char_to_idx[SPACE] = 1
+  char_to_idx[START] = 2
   for filename in file_list:
     if filename:
       with codecs.open(filename, "r", encoding="latin-1") as f:
@@ -56,8 +70,8 @@ def build_word_dict(file_list):
           letters = line.split(' ')
           for l in letters:
             l = l.rstrip() # Remove pesky line feed from </s>
-            if l not in word_to_idx:
-              word_to_idx[l] = last_idx
+            if l not in char_to_idx:
+              char_to_idx[l] = last_idx
               last_idx = last_idx + 1
 
 def main(arguments):
@@ -67,32 +81,46 @@ def main(arguments):
     formatter_class=argparse.RawDescriptionHelpFormatter)
   parser.add_argument('dataset', help="Data set",
             type=str)
-  parser.add_argument('ngram', help="Length of ngram",
-            type=int)
   args = parser.parse_args(arguments)
   dataset = args.dataset
-  ngram = args.ngram
   train, valid, valid_kaggle, test = FILE_PATHS[dataset]
 
-  build_word_dict([train, valid, valid_kaggle, test])
-  input_dict, output_dict = build_ngrams([train, valid], ngram)
+  seq = 50
+  batch = 32
+
+  build_char_dict([train, valid, valid_kaggle, test])
+  input_dict, output_dict = build_indices([train, valid, valid_kaggle, test], seq)
+
+  train_input_cb = np.array(input_dict[train], dtype=np.int32)
+  train_output_cb = np.array(output_dict[train], dtype=np.int32)
+  valid_input_cb = np.array(input_dict[valid], dtype=np.int32)
+  valid_output_cb = np.array(output_dict[valid], dtype=np.int32)
 
   train_input = np.array(input_dict[train], dtype=np.int32)
   train_output = np.array(output_dict[train], dtype=np.int32)
   valid_input = np.array(input_dict[valid], dtype=np.int32)
   valid_output = np.array(output_dict[valid], dtype=np.int32)
+  valid_kaggle_input = np.array(input_dict[valid_kaggle], dtype=np.int32)
+  valid_kaggle_output = np.array(output_dict[valid_kaggle], dtype=np.int32)
+  test_input = np.array(input_dict[test], dtype=np.int32)
 
-  filename = args.dataset + '_' + str(ngram) + 'gram.hdf5'
+  filename = args.dataset + '.hdf5'
+  print('Writing to ' + filename)
   with h5py.File(filename, "w") as f:
+    f['train_input_cb'] = train_input_cb
+    f['train_output_cb'] = train_output_cb
+    f['valid_input_cb'] = valid_input_cb
+    f['valid_output_cb'] = valid_output_cb
+
     f['train_input'] = train_input
     f['train_output'] = train_output
-    if valid:
-      f['valid_input'] = valid_input
-      f['valid_output'] = valid_output
-    # if test:
-    #   f['test_input'] = test_input
+    f['valid_input'] = valid_input
+    f['valid_output'] = valid_output
+    f['valid_kaggle_input'] = valid_input
+    f['valid_kaggle_output'] = valid_output
+    f['test_input'] = test_input
+
     f['nclasses'] = np.array([2], dtype=np.int32) # space or not
-    f['ngram'] = np.array([ngram], dtype=np.int32)
 
 
 if __name__ == '__main__':
