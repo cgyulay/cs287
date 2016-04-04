@@ -119,14 +119,24 @@ function greedy_search(seq, ngram, p_ngram, cb, cutoff)
   return find_all(seq, SPACE)
 end
 
-function viterbi_search(seq, ngram, p_ngram)
+-- Bigram only for now
+function viterbi_search(seq, ngram, p_ngram, cb, cutoff)
   ngram = ngram - 1
   local pi = torch.Tensor(seq:size(1), nclasses)
+  print(pi)
 
   -- Assume that the first ngram chars are context from a previous example
   local idx = ngram
   while idx < seq:size(1) do
+    local ctx = seq[{{idx-ngram+1, idx}}]
+    local p_space = 0
 
+    if cb then
+      ctx = tensor_to_key(ctx)
+      p_space = p_ngram(ctx, SPACE, true)
+    else
+      p_space = p_ngram(ctx)
+    end
   end
 
   return find_all(seq, SPACE)
@@ -141,6 +151,7 @@ function predict(x, y, ngram, search, cb, cutoff)
   local spaces = search(seq, ngram, p_ngram, cb, cutoff)
   se = se + math.pow(spaces - y[1], 2)
   local prev_ctx = seq[{{stop - ngram + 1, stop - 1}}] -- Don't grab last </s>
+  prev_ctx:cat(torch.ones(1):int()) -- Add space
 
   for i = 2, x:size(1) do
     -- Append context from end of previous example
@@ -150,6 +161,7 @@ function predict(x, y, ngram, search, cb, cutoff)
     spaces = search(seq, ngram, p_ngram, cb, cutoff)
     se = se + math.pow(spaces - y[i], 2)
     prev_ctx = seq[{{stop - ngram + 1, stop - 1}}]
+    prev_ctx:cat(torch.ones(1):int()) -- Add space
     -- print(spaces, y[i])
   end
 
@@ -183,7 +195,7 @@ function count_based(max_ngram)
 
   -- Create co-occurrence dictionary mapping contexts to following words
   function build_ngram(x, y, ngram)
-    print('Building p(w_i|w_i-n+1,...,w_i-1) for i=' .. ngram .. '...')
+    print('Building p(space|w_i-n+1,...,w_i-1) for i=' .. ngram .. '...')
     ngram = ngram - 1 -- Shorten by 1 to get context length
     local grams = {}
     for i = ngram, x:size(1) do
@@ -302,7 +314,7 @@ function count_based(max_ngram)
   print('Validation segmentation mse: ' .. mse)
 
   -- print('Calculating Viterbi mse on validation segmentation...')
-  -- -- Bigram only for now
+  -- Bigram only for now
   -- local mse = predict(valid_kaggle_x, valid_kaggle_y, 2, viterbi_search, true)
   -- print('Validation segmentation mse: ' .. mse)
 
@@ -439,7 +451,7 @@ function nnlm(dwin)
   end
 
   print('\nCalculating greedy mse on validation segmentation...')
-  local mse = predict(valid_kaggle_x, valid_kaggle_y, dwin+1, greedy_search, false, 0.07)
+  local mse = predict(valid_kaggle_x, valid_kaggle_y, dwin+1, greedy_search, false, 0.08)
   print('Validation segmentation mse: ' .. mse)
 end
 
@@ -558,25 +570,31 @@ function rnn(structure)
     return count - 1
   end
 
-  function rnn_predict(x, y, n_examples)
+  function rnn_predict(x, y, n_examples, test)
     if n_examples > x:size(1) or n_examples < 1 then n_examples = x:size(1) end
+    local preds = {}
     local se = 0
     local high = 0
     local low = 0
     for i = 1, n_examples do
       seq = x[i]
       spaces = rnn_greedy_search(seq)
-      se = se + math.pow(spaces - y[i], 2)
-      if spaces - y[i] > 0 then
-        high = high + 1
-      elseif y[i] - spaces > 0 then
-        low = low + 1
+
+      if not test then
+        se = se + math.pow(spaces - y[i], 2)
+        if spaces - y[i] > 0 then
+          high = high + 1
+        elseif y[i] - spaces > 0 then
+          low = low + 1
+        end
       end
+      preds[i] = spaces
       -- print(spaces, y[i])
     end
 
     print('high: ' .. high .. ', low: ' .. low)
-    return se / n_examples
+    if test then return preds end
+    return (se / n_examples)
   end
 
   -- Train
@@ -629,11 +647,13 @@ function rnn(structure)
     -- print('Train perplexity after epoch ' .. e .. ': ' .. train_perp .. '.')
   end
 
-  -- TODO
   print('\nCalculating greedy mse on validation segmentation...')
   local subset = 200
-  local mse = rnn_predict(valid_kaggle_x, valid_kaggle_y, subset)
+  local mse = rnn_predict(valid_kaggle_x, valid_kaggle_y, subset, false)
   print('Validation segmentation mse: ' .. mse)
+
+  -- Predict spaces for kaggle test
+  local preds = rnn_predict(test_x, nil, -1, true)
 end
 
 function main() 

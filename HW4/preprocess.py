@@ -62,7 +62,7 @@ def build_batches(vals, l, b):
   for i in range(n / (b * l)):
     batch = []
     for j in range(b):
-      batch.append(vals[(n / b * j) + (l * i): (n / b * j) + l + (l * i)])
+      batch.append(vals[(n / b * j) + (l * i): (n / b * j) + (l * (i + 1))])
 
     batches.append(batch)
   return batches
