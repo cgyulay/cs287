@@ -19,8 +19,7 @@ FILE_PATHS = {"PTB": ("data/train_chars.txt",
 args = {}
 char_to_idx = {}
 
-# For train/valid datasets
-def build_indices(file_list, seq_len):
+def build_indices(file_list):
   inp = {}
   out = {}
   for filename in file_list:
@@ -57,6 +56,17 @@ def build_indices(file_list, seq_len):
           out[filename] = out_arr
   return inp, out
 
+def build_batches(vals, l, b):
+  n = len(vals)
+  batches = []
+  for i in range(n / (b * l)):
+    batch = []
+    for j in range(b):
+      batch.append(vals[(n / b * j) + (l * i): (n / b * j) + l + (l * i)])
+
+    batches.append(batch)
+  return batches
+
 def build_char_dict(file_list):
   last_idx = 3
   char_to_idx[SPACE] = 1
@@ -89,17 +99,17 @@ def main(arguments):
   batch = 32
 
   build_char_dict([train, valid, valid_kaggle, test])
-  input_dict, output_dict = build_indices([train, valid, valid_kaggle, test], seq)
+  input_dict, output_dict = build_indices([train, valid, valid_kaggle, test])
+  train_input_batch = build_batches(input_dict[train], seq, batch)
+  train_output_batch = build_batches(output_dict[train], seq, batch)
+  valid_input_batch = build_batches(input_dict[valid], seq, batch)
+  valid_output_batch = build_batches(output_dict[valid], seq, batch)
 
   train_input_cb = np.array(input_dict[train], dtype=np.int32)
   train_output_cb = np.array(output_dict[train], dtype=np.int32)
   valid_input_cb = np.array(input_dict[valid], dtype=np.int32)
   valid_output_cb = np.array(output_dict[valid], dtype=np.int32)
 
-  train_input = np.array(input_dict[train], dtype=np.int32)
-  train_output = np.array(output_dict[train], dtype=np.int32)
-  valid_input = np.array(input_dict[valid], dtype=np.int32)
-  valid_output = np.array(output_dict[valid], dtype=np.int32)
   valid_kaggle_input = np.array(input_dict[valid_kaggle], dtype=np.int32)
   valid_kaggle_output = np.array(output_dict[valid_kaggle], dtype=np.int32)
   test_input = np.array(input_dict[test], dtype=np.int32)
@@ -112,15 +122,18 @@ def main(arguments):
     f['valid_input_cb'] = valid_input_cb
     f['valid_output_cb'] = valid_output_cb
 
-    f['train_input'] = train_input
-    f['train_output'] = train_output
-    f['valid_input'] = valid_input
-    f['valid_output'] = valid_output
-    f['valid_kaggle_input'] = valid_input
-    f['valid_kaggle_output'] = valid_output
+    f['train_input'] = train_input_batch
+    f['train_output'] = train_output_batch
+    f['valid_input'] = valid_input_batch
+    f['valid_output'] = valid_output_batch
+    f['valid_kaggle_input'] = valid_kaggle_input
+    f['valid_kaggle_output'] = valid_kaggle_output
     f['test_input'] = test_input
 
     f['nclasses'] = np.array([2], dtype=np.int32) # space or not
+    f['nletters'] = np.array([len(char_to_idx)], dtype=np.int32)
+    f['seq'] = np.array([seq], dtype=np.int32)
+    f['batch'] = np.array([batch], dtype=np.int32)
 
 
 if __name__ == '__main__':
