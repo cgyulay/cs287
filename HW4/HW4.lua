@@ -85,6 +85,28 @@ function renorm_grad(data, th)
   end
 end
 
+-- Logging
+local function save_performance(name, tperp, vperp)
+  local f = torch.DiskFile('training_output/' .. name .. '.txt', 'w')
+  for j = 1, vperp:size(1) do
+    f:writeString(tperp[j] .. ','  .. vperp[j] .. '\n')
+  end
+  f:close()
+end
+
+-- Kaggle prediction
+function predict_kaggle(preds)
+  local f = torch.DiskFile('training_output/kaggle_preds_model=' .. lm .. '.txt', 'w')
+  f:writeString('ID,Count\n') -- Header row
+
+  for i = 1, preds:size(1) do
+    f:writeString(tostring(preds[i]))
+    f:writeString('\n')
+  end
+
+  f:close()
+end
+
 ----------
 -- Sequence Search
 ----------
@@ -153,6 +175,9 @@ function predict(x, y, ngram, search, cb, cutoff)
   local prev_ctx = seq[{{stop - ngram + 1, stop - 1}}] -- Don't grab last </s>
   prev_ctx:cat(torch.ones(1):int()) -- Add space
 
+  local high = 0
+  local low = 0
+
   for i = 2, x:size(1) do
     -- Append context from end of previous example
     seq = prev_ctx:cat(x[i])
@@ -163,8 +188,15 @@ function predict(x, y, ngram, search, cb, cutoff)
     prev_ctx = seq[{{stop - ngram + 1, stop - 1}}]
     prev_ctx:cat(torch.ones(1):int()) -- Add space
     -- print(spaces, y[i])
+
+    if spaces - y[i] > 0 then
+      high = high + 1
+    elseif y[i] - spaces > 0 then
+      low = low + 1
+    end
   end
 
+  print('high: ' .. high .. ', low: ' .. low)
   return se / x:size(1)
 end
 
@@ -332,7 +364,7 @@ end
 ----------
 
 function nnlm(dwin)
-  local embedding_size = 50
+  local embedding_size = 100
   local din = embedding_size * dwin
   local dhid = 100
   local dout = nclasses
@@ -373,8 +405,6 @@ function nnlm(dwin)
   model:add(nn.Tanh())
   model:add(nn.Linear(dhid, dout))
 
-  -- model:add(nn.Sigmoid())
-  -- nll = nn.BCECriterion()
   model:add(nn.LogSoftMax())
   nll = nn.ClassNLLCriterion()
 
@@ -392,19 +422,17 @@ function nnlm(dwin)
     local preds = model:forward(x)
     local loss = nll:forward(preds, y)
     return math.exp(loss)
-    -- local max, yhat = preds:max(2)
-    -- local correct = yhat:int():eq(y):double():mean() * 100
-    -- return correct, loss, perp
   end
 
   -- Probability for specific context
   function p_ngram(x)
     local pred = model:forward(x)
-    -- print(x)
-    -- print(pred)
-    -- print(math.exp(pred[2]))
     return math.exp(pred[2])
   end
+
+  -- Logging
+  local vperp = torch.DoubleTensor(nepochs)
+  local tperp = torch.DoubleTensor(nepochs)
 
   -- Train
   local n_train_batches = train_x:size(1) / batch_size
@@ -436,7 +464,7 @@ function nnlm(dwin)
 
     -- If perplexity increases from previous epoch, halve eta
     local perp = test(valid_x, valid_y)
-    if perp > prev_perp then
+    if perp > prev_perp or math.abs(perp - prev_perp) < 0.002 then
       eta = eta / 2
       print('Reducing learning rate to ' .. eta .. '.')
     end
@@ -448,11 +476,22 @@ function nnlm(dwin)
     print('Epoch ' .. e .. ' training completed in ' .. timer:time().real ..
       ' seconds.')
     print('Validation perplexity after epoch ' .. e .. ': ' .. perp .. '.')
+
+    local train_perp = test(train_x, train_y)
+    print('Train perplexity after epoch ' .. e .. ': ' .. train_perp .. '.')
+
+    vperp[e] = perp
+    tperp[e] = train_perp
   end
 
   print('\nCalculating greedy mse on validation segmentation...')
-  local mse = predict(valid_kaggle_x, valid_kaggle_y, dwin+1, greedy_search, false, 0.08)
+  local mse = predict(valid_kaggle_x, valid_kaggle_y, dwin+1, greedy_search, false, 0.4)
   print('Validation segmentation mse: ' .. mse)
+
+  -- Save to logfile
+  local name = 'model=' .. lm .. ',dwin=' .. dwin .. ',dembed='
+  .. embedding_size .. ',mse=' .. mse
+  save_performance(name, tperp, vperp)
 end
 
 ----------
@@ -597,8 +636,11 @@ function rnn(structure)
     return (se / n_examples)
   end
 
+  -- Logging
+  local vperp = torch.DoubleTensor(nepochs)
+  local tperp = torch.DoubleTensor(nepochs)
+
   -- Train
-  -- local n_train_batches = train_x:size(1) / batch_size
   local n_examples = train_x:size(1)
   local prev_perp = math.huge
 
@@ -643,17 +685,25 @@ function rnn(structure)
       ' seconds.')
     print('Validation perplexity after epoch ' .. e .. ': ' .. perp .. '.')
 
-    -- local train_perp = test(train_x, train_y)
-    -- print('Train perplexity after epoch ' .. e .. ': ' .. train_perp .. '.')
+    local train_perp = test(train_x, train_y)
+    print('Train perplexity after epoch ' .. e .. ': ' .. train_perp .. '.')
+
+    vperp[e] = perp
+    tperp[e] = train_perp
   end
 
   print('\nCalculating greedy mse on validation segmentation...')
-  local subset = 200
+  local subset = 100
   local mse = rnn_predict(valid_kaggle_x, valid_kaggle_y, subset, false)
   print('Validation segmentation mse: ' .. mse)
 
+  -- Save to logfile
+  local name = 'model=' .. lm .. ',dembed=' .. embedding_size .. ',mse=' .. mse
+  save_performance(name, tperp, vperp)
+
   -- Predict spaces for kaggle test
   local preds = rnn_predict(test_x, nil, -1, true)
+  predict_kaggle()
 end
 
 function main() 
