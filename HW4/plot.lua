@@ -101,9 +101,9 @@ end
 -- local o2 = torch.DoubleTensor({{0.0001, 506.65}, {0.001, 343.40}, {0.01, 294.94}, {0.1, 395.94}, {1, 846.90}})
 -- plot(o1, o2, 'Tuning Alpha Smoothing Constant for CBLap', 'Alpha', 'Perp', 'laptune')
 
-o1 = accuracyforfile('training_output/model=nn,dwin=9,dembed=15,mse=6.1554896142433.txt')
-o2 = accuracyforfile('training_output/model=nn,dwin=9,dembed=50,mse=6.4412462908012.txt')
-o3 = accuracyforfile('training_output/model=nn,dwin=9,dembed=100,mse=6.1810089020772.txt')
+o1 = accuracyforfile('training_output/model=lstm,dembed=15,mse=7.156.txt')
+o2 = accuracyforfile('training_output/model=lstm,dembed=50,mse=5.992.txt')
+o3 = accuracyforfile('training_output/model=lstm,dembed=100,mse=6.493.txt')
 -- o4 = accuracyforfile('training_output/model=nn,dwin=11,dembed=50,mse=6.8.txt')
 
-plot(o1, o2, o3, 'NNLM Comparison (dembed)', 'Epochs', 'Perp', 'nnlmcompdembed')
+plot(o1, o2, o3, 'LSTM Comparison (dembed)', 'Epochs', 'Perp', 'lstmcompdembed')

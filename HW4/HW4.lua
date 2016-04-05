@@ -16,6 +16,7 @@ cmd:option('-mb', 32, 'minibatch size')
 cmd:option('-ngram', 3, 'ngram size to use for context')
 cmd:option('-gpu', 0, 'whether to use gpu for training')
 
+NOSPACE = 0
 SPACE = 1
 STOP = 28
 
@@ -125,7 +126,7 @@ function greedy_search(seq, ngram, p_ngram, cb, cutoff)
       ctx = tensor_to_key(ctx)
       p_space = p_ngram(ctx, SPACE, true)
     else
-      p_space = p_ngram(ctx)
+      p_space = p_ngram(ctx, SPACE+1)
     end
 
     if p_space > cutoff then
@@ -135,7 +136,6 @@ function greedy_search(seq, ngram, p_ngram, cb, cutoff)
       seq = prev:cat(torch.IntTensor({1})):cat(post)
     end
     idx = idx + 1
-    -- score = score + math.log(p_space)
   end
 
   return find_all(seq, SPACE)
@@ -143,22 +143,36 @@ end
 
 -- Bigram only for now
 function viterbi_search(seq, ngram, p_ngram, cb, cutoff)
-  ngram = ngram - 1
-  local pi = torch.Tensor(seq:size(1), nclasses)
-  print(pi)
+  ngram = 1 -- 2 - 1
+  local head = torch.Tensor(nclasses)
 
   -- Assume that the first ngram chars are context from a previous example
+  local larger_score = 0
   local idx = ngram
   while idx < seq:size(1) do
+    head[1] = larger_score
+    head[2] = larger_score
     local ctx = seq[{{idx-ngram+1, idx}}]
-    local p_space = 0
 
     if cb then
       ctx = tensor_to_key(ctx)
-      p_space = p_ngram(ctx, SPACE, true)
+      head[1] = head[1] + math.log(p_ngram(ctx, NOSPACE, true))
+      head[2] = head[2] + math.log(p_ngram(ctx, SPACE, true))
     else
-      p_space = p_ngram(ctx)
+      head[1] = head[1] + math.log(p_ngram(ctx, NOSPACE+1))
+      head[2] = head[2] + math.log(p_ngram(ctx, SPACE+1))
     end
+
+    if head[2] > head[1] then
+      -- Need to insert a space when head[2] -- p(space) -- is preferred
+      local prev = seq[{{1, idx}}]
+      local post = seq[{{idx+1, seq:size(1)}}]
+      seq = prev:cat(torch.IntTensor({1})):cat(post)
+      larger_score = head[2]
+    else
+      larger_score = head[1]
+    end
+    idx = idx + 1
   end
 
   return find_all(seq, SPACE)
@@ -345,10 +359,10 @@ function count_based(max_ngram)
   local mse = predict(valid_kaggle_x, valid_kaggle_y, max_ngram, greedy_search, true, 0.5)
   print('Validation segmentation mse: ' .. mse)
 
-  -- print('Calculating Viterbi mse on validation segmentation...')
+  print('Calculating Viterbi mse on validation segmentation...')
   -- Bigram only for now
-  -- local mse = predict(valid_kaggle_x, valid_kaggle_y, 2, viterbi_search, true)
-  -- print('Validation segmentation mse: ' .. mse)
+  local mse = predict(valid_kaggle_x, valid_kaggle_y, 2, viterbi_search, true)
+  print('Validation segmentation mse: ' .. mse)
 
   print('Calculating perplexity on train...')
   local perp = perplexity(train_x_cb, train_y_cb, max_ngram - 1)
@@ -425,9 +439,9 @@ function nnlm(dwin)
   end
 
   -- Probability for specific context
-  function p_ngram(x)
+  function p_ngram(x, idx)
     local pred = model:forward(x)
-    return math.exp(pred[2])
+    return math.exp(pred[idx])
   end
 
   -- Logging
@@ -503,7 +517,7 @@ function rnn(structure)
 
   local name = 'LSTM'
   if structure == 'gru' then name = 'GRU'
-  elseif structure == 'multi' then name = 'Multilayer LSTM' end
+  elseif structure == 'stack' then name = 'Stacked LSTM' end
 
   print('\nBuilding ' .. name .. ' with hyperparameters:')
   print('Learning rate (eta): ' .. eta)
@@ -526,7 +540,7 @@ function rnn(structure)
 
   if structure == 'gru' then
     model:add(nn.Sequencer(nn.GRU(embedding_size, embedding_size)):remember('both'))
-  elseif structure == 'multi' then
+  elseif structure == 'stack' then
     model:add(nn.Sequencer(nn.FastLSTM(embedding_size, embedding_size)):remember('both'))
     model:add(nn.Sequencer(nn.Dropout(0.5)))
     model:add(nn.Sequencer(nn.FastLSTM(embedding_size, embedding_size)):remember('both'))
@@ -569,8 +583,7 @@ function rnn(structure)
     return math.exp(loss)
   end
 
-  function find_nth_space(t, n)
-    local cutoff = 0.25
+  function find_nth_space(t, n, cutoff)
     local count = 0
     for i = 1, #t do
       if math.exp(t[i][2]) > cutoff then
@@ -592,17 +605,23 @@ function rnn(structure)
     if stop == -1 then stop = seq:size(1) end
     local seq = seq[{{1, stop}}] -- Chop off unnecessary </s>
 
+    local cutoff = 0.3 -- 0.28
     local idx = 1
     local count = 1
     while idx > 0 do
       local preds = model:forward(seq)
-      idx = find_nth_space(preds, count)
+      idx = find_nth_space(preds, count, cutoff)
 
       if idx > 0 then
-        local prev = seq[{{1, idx}}]
-        local post = seq[{{idx+1, seq:size(1)}}]
-        seq = prev:cat(torch.IntTensor({1})):cat(post)
-        count = count + 1
+        if idx+1 > seq:size(1) then -- Handle end prediction
+          local prev = seq[{{1, idx}}]
+          seq = prev:cat(torch.IntTensor({1}))
+        else
+          local prev = seq[{{1, idx}}]
+          local post = seq[{{idx+1, seq:size(1)}}]
+          seq = prev:cat(torch.IntTensor({1})):cat(post)
+          count = count + 1
+        end
       end
     end
 
@@ -693,7 +712,7 @@ function rnn(structure)
   end
 
   print('\nCalculating greedy mse on validation segmentation...')
-  local subset = 100
+  local subset = 1000
   local mse = rnn_predict(valid_kaggle_x, valid_kaggle_y, subset, false)
   print('Validation segmentation mse: ' .. mse)
 
@@ -702,8 +721,8 @@ function rnn(structure)
   save_performance(name, tperp, vperp)
 
   -- Predict spaces for kaggle test
-  local preds = rnn_predict(test_x, nil, -1, true)
-  predict_kaggle()
+  -- local preds = rnn_predict(test_x, nil, -1, true)
+  -- predict_kaggle()
 end
 
 function main() 
@@ -742,7 +761,7 @@ function main()
   else
     batch_size = f:read('batch'):all():long()[1]
     seq_len = f:read('seq'):all():long()[1]
-    rnn()
+    rnn(lm)
   end
    
 end
