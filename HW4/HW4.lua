@@ -100,8 +100,8 @@ function predict_kaggle(preds)
   local f = torch.DiskFile('training_output/kaggle_preds_model=' .. lm .. '.txt', 'w')
   f:writeString('ID,Count\n') -- Header row
 
-  for i = 1, preds:size(1) do
-    f:writeString(tostring(preds[i]))
+  for i = 1, #preds do
+    f:writeString(tostring(i) .. ',' .. tostring(preds[i]))
     f:writeString('\n')
   end
 
@@ -634,6 +634,8 @@ function rnn(structure)
     local se = 0
     local high = 0
     local low = 0
+
+    print('Predicting spaces for ' .. n_examples .. ' examples.')
     for i = 1, n_examples do
       seq = x[i]
       spaces = rnn_greedy_search(seq)
@@ -648,10 +650,14 @@ function rnn(structure)
       end
       preds[i] = spaces
       -- print(spaces, y[i])
+
+      if i % 200 == 0 then
+        print('Completed ' .. i .. ' examples.')
+      end
     end
 
-    print('high: ' .. high .. ', low: ' .. low)
     if test then return preds end
+    print('high: ' .. high .. ', low: ' .. low)
     return (se / n_examples)
   end
 
@@ -711,18 +717,20 @@ function rnn(structure)
     tperp[e] = train_perp
   end
 
-  print('\nCalculating greedy mse on validation segmentation...')
-  local subset = 1000
-  local mse = rnn_predict(valid_kaggle_x, valid_kaggle_y, subset, false)
-  print('Validation segmentation mse: ' .. mse)
+  -- print('\nCalculating greedy mse on validation segmentation...')
+  -- local subset = 1000
+  -- local mse = rnn_predict(valid_kaggle_x, valid_kaggle_y, subset, false)
+  -- print('Validation segmentation mse: ' .. mse)
 
   -- Save to logfile
+  local mse = 0
   local name = 'model=' .. lm .. ',dembed=' .. embedding_size .. ',mse=' .. mse
   save_performance(name, tperp, vperp)
 
   -- Predict spaces for kaggle test
-  -- local preds = rnn_predict(test_x, nil, -1, true)
-  -- predict_kaggle()
+  print('\nPredicting spaces on kaggle segmentation...')
+  local preds = rnn_predict(test_x, nil, -1, true)
+  predict_kaggle(preds)
 end
 
 function main() 
