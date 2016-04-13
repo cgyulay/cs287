@@ -3,7 +3,6 @@ Psets and work related to CS 287.
 
 ----
 ####Primary contributors
-[Alex Saich](https://github.com/asaich)
 
 [Colton Gyulay](https://github.com/cgyulay)
 
