@@ -69,6 +69,9 @@ def build_sentences(file_list):
             * (longest - len(output_s[filename][i]))
   return input_s, output_s
 
+def sentences_to_ngrams(x, y):
+  return {}
+
 def build_tag_dict(filename):
   idx = -1
   with codecs.open(filename, 'r', encoding='latin-1') as f:
@@ -135,6 +138,9 @@ def main(arguments):
   valid_output = np.array(output_dict[valid], dtype=np.int32)
   test_input = np.array(input_dict[test], dtype=np.int32)
 
+  train_ngram_dict = sentences_to_ngrams(input_dict[train], output_dict[train])
+  valid_ngram_dict = sentences_to_ngrams(input_dict[valid], output_dict[valid])
+
   filename = args.dataset + '.hdf5'
   with h5py.File(filename, 'w') as f:
     f['train_input'] = train_input
@@ -145,6 +151,7 @@ def main(arguments):
     if test:
       f['test_input'] = test_input
     f['nfeatures'] = np.array([V], dtype=np.int32)
+    f['nwords'] = np.array([V], dtype=np.int32)
     f['nclasses'] = np.array([C], dtype=np.int32)
 
 
