@@ -1,7 +1,7 @@
 -- Only requirements allowed
-require("hdf5")
-require("nn")
-require("optim")
+require('hdf5')
+require('nn')
+require('optim')
 
 cmd = torch.CmdLine()
 
@@ -184,7 +184,113 @@ end
 ----------
 
 function memm()
+  print('\nBuilding MEMM with hyperparameters:')
+  print('Learning rate (eta): ' .. eta)
+  print('Number of epochs (nepochs): ' .. nepochs)
+  print('Mini-batch size (mb): ' .. batch_size)
+
+  local model = nn.Sequential()
   
+  -- Word input
+  local sparse_W_w = nn.LookupTable(nwords, nclasses)
+  local W_w = nn.Sequential():add(sparse_W_w):add(nn.Sum(2))
+  -- print(W_w:forward(train_x_w[1]))
+
+  -- Tag input
+  local sparse_W_t = nn.LookupTable(nclasses, nclasses)
+  local W_t = nn.Sequential():add(sparse_W_t):add(nn.Sum(2))
+  -- print(W_t:forward(train_x_t[1]))
+  
+  local par = nn.ParallelTable()
+  par:add(W_w)
+  par:add(W_t)
+
+  model:add(par)
+  -- print(model:forward({train_x_w[1], train_x_t[1]}))
+
+  model:add(nn.CAddTable())
+  model:add(nn.LogSoftMax())
+
+  local nll = nn.ClassNLLCriterion()
+  local params, gradParams = model:getParameters()
+
+  if gpu == 1 then
+    model:cuda()
+    nll = nll:cuda()
+    params = params:cuda()
+    gradParams = gradParams:cuda()
+    print('Using gpu accelerated training.')
+  end
+
+  -- Logging
+  -- local vperp = torch.DoubleTensor(nepochs)
+  -- local tperp = torch.DoubleTensor(nepochs)
+
+  function test(x_w, x_t, y)
+    local preds = model:forward({x_w, x_t})
+    local loss = nll:forward(preds, y)
+    local max, yhat = preds:max(2)
+    
+    local correct = yhat:int():eq(y):double():mean() * 100
+    return correct
+  end
+
+  -- Train
+  local n_train_batches = train_x:size(1) / batch_size
+  local prev_acc = math.huge
+
+  for e = 1, nepochs do
+    print('\nBeginning epoch ' .. e .. ' training: ' .. n_train_batches ..
+      ' minibatches of size ' .. batch_size .. '.')
+    local loss = 0
+    local timer = torch.Timer()
+
+    for j = 1, n_train_batches do
+      model:zeroGradParameters()
+      local x_w = train_x_w:narrow(1, (j - 1) * batch_size + 1, batch_size)
+      local x_t = train_x_t:narrow(1, (j - 1) * batch_size + 1, batch_size)
+      local y = train_y_memm:narrow(1, (j - 1) * batch_size + 1, batch_size)
+
+      if gpu == 1 then
+        x = x:cuda()
+        y = y:cuda()
+      end
+
+      local preds = model:forward({x_w, x_t})
+      loss = loss + nll:forward(preds, y)
+
+      local dLdpreds = nll:backward(preds, y)
+      model:backward(preds, dLdpreds)
+      model:updateParameters(eta)
+    end
+
+    -- If accuracy isn't increasing from previous epoch, halve eta
+    local acc = test(valid_x_w, valid_x_t, valid_y_memm)
+    if acc > prev_acc or math.abs(acc - prev_acc) < 0.002 then
+      eta = eta / 2
+      print('Reducing learning rate to ' .. eta .. '.')
+    end
+    prev_perp = perp
+    
+    print('Epoch ' .. e .. ' training completed in ' .. timer:time().real ..
+      ' seconds.')
+    print('Validation accuracy after epoch ' .. e .. ': ' .. acc .. '.')
+
+    -- local train_perp = test(train_x, train_y)
+    -- print('Train perplexity after epoch ' .. e .. ': ' .. train_perp .. '.')
+
+    -- vperp[e] = perp
+    -- tperp[e] = train_perp
+  end
+
+  -- print('\nCalculating greedy mse on validation segmentation...')
+  -- local mse = predict(valid_kaggle_x, valid_kaggle_y, dwin+1, greedy_search, false, 0.4)
+  -- print('Validation segmentation mse: ' .. mse)
+
+  -- Save to logfile
+  -- local name = 'model=' .. lm .. ',dwin=' .. dwin .. ',dembed='
+  -- .. embedding_size .. ',mse=' .. mse
+  -- save_performance(name, tperp, vperp)
 end
 
 ----------
@@ -207,8 +313,9 @@ function main()
 
   local f = hdf5.open(opt.datafile, 'r')
   nclasses = f:read('nclasses'):all():long()[1]
-  nfeatures = f:read('nfeatures'):all():long()[1]
   nwords = f:read('nwords'):all():long()[1]
+  nfeatures = f:read('nfeatures'):all():long()[1]
+  dwin = nfeatures / 2
 
    -- Split training, validation, test data
   train_x = f:read('train_input'):all()
@@ -216,6 +323,13 @@ function main()
   valid_x = f:read('valid_input'):all()
   valid_y = f:read('valid_output'):all()
   test_x = f:read('test_input'):all()
+
+  train_x_w = f:read('train_input_w'):all()
+  train_x_t = f:read('train_input_t'):all()
+  train_y_memm = f:read('train_output_memm'):all()
+  valid_x_w = f:read('valid_input_w'):all()
+  valid_x_t = f:read('valid_input_t'):all()
+  valid_y_memm = f:read('valid_output_memm'):all()
 
   if lm == 'hmm' then
     hmm()

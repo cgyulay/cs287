@@ -69,8 +69,25 @@ def build_sentences(file_list):
             * (longest - len(output_s[filename][i]))
   return input_s, output_s
 
-def sentences_to_ngrams(x, y):
-  return {}
+def sentences_to_windows(xs, ys, dwin):
+  input_w = []
+  input_t = []
+  output = []
+  for i in range(len(xs)):
+    padding = dwin - 1 # Each sentence already has 1 start token
+    x = [word_to_idx[START]] * padding + xs[i][0:xs[i].index(word_to_idx[STOP]) + 1]
+    y = [tag_to_idx[START_TAG]] * padding + ys[i][0:ys[i].index(tag_to_idx[STOP_TAG]) + 1]
+
+    for j in range(dwin, len(x)):
+      # x = dwin prev tags (excl current), dwin words (including current)
+      # y = current tag
+      w_window = x[j-dwin+1:j+1]
+      prev_tags = y[j-dwin:j]
+      input_w.append(w_window)
+      input_t.append(prev_tags)
+      output.append(y[j])
+  return input_w, input_t, output
+
 
 def build_tag_dict(filename):
   idx = -1
@@ -138,19 +155,35 @@ def main(arguments):
   valid_output = np.array(output_dict[valid], dtype=np.int32)
   test_input = np.array(input_dict[test], dtype=np.int32)
 
-  train_ngram_dict = sentences_to_ngrams(input_dict[train], output_dict[train])
-  valid_ngram_dict = sentences_to_ngrams(input_dict[valid], output_dict[valid])
+  dwin = 1
+  train_input_w, train_input_t, train_output_memm = \
+    sentences_to_windows(input_dict[train], output_dict[train], dwin)
+  valid_input_w, valid_input_t, valid_output_memm = \
+    sentences_to_windows(input_dict[valid], output_dict[valid], dwin)
+  train_input_w = np.array(train_input_w, dtype=np.int32)
+  train_input_t = np.array(train_input_t, dtype=np.int32)
+  train_output_memm = np.array(train_output_memm, dtype=np.int32)
+
+  valid_input_w = np.array(valid_input_w, dtype=np.int32)
+  valid_input_t = np.array(valid_input_t, dtype=np.int32)
+  valid_output_memm = np.array(valid_output_memm, dtype=np.int32)
 
   filename = args.dataset + '.hdf5'
   with h5py.File(filename, 'w') as f:
     f['train_input'] = train_input
     f['train_output'] = train_output
-    if valid:
-      f['valid_input'] = valid_input
-      f['valid_output'] = valid_output
-    if test:
-      f['test_input'] = test_input
-    f['nfeatures'] = np.array([V], dtype=np.int32)
+    f['valid_input'] = valid_input
+    f['valid_output'] = valid_output
+    f['test_input'] = test_input
+
+    f['train_input_w'] = train_input_w
+    f['train_input_t'] = train_input_t
+    f['train_output_memm'] = train_output_memm
+    f['valid_input_w'] = valid_input_w
+    f['valid_input_t'] = valid_input_t
+    f['valid_output_memm'] = valid_output_memm
+
+    f['nfeatures'] = np.array([dwin * 2], dtype=np.int32)
     f['nwords'] = np.array([V], dtype=np.int32)
     f['nclasses'] = np.array([C], dtype=np.int32)
 
