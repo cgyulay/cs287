@@ -95,7 +95,7 @@ end
 
 -- Logging
 local function save_performance(name, t, v, flog)
-  if flog == nil then flog = torch.zeros(nepochs)
+  if flog == nil then flog = torch.zeros(nepochs) end
   local f = torch.DiskFile('training_output/' .. name .. '.txt', 'w')
   for j = 1, v:size(1) do
     f:writeString(t[j] .. ','  .. v[j] .. ',' .. flog[j] .. '\n')
@@ -317,8 +317,8 @@ function memm(lm)
 
   -- Scoring for viterbi
   function memm_score(x_w, x_t, i)
-    local w = torch.Tensor({x_w[i]}):view(1, 1)
-    local t = torch.Tensor({x_t[i]}):view(1, 1)
+    local w = torch.Tensor({{x_w[i]}})
+    local t = torch.Tensor({{x_t[i]}})
     local score = model:forward({w, t}):view(nclasses, 1):expand(nclasses, nclasses)
 
     -- Prevent predicting start or stop tokens
@@ -331,6 +331,16 @@ function memm(lm)
     local w = x_w[i]:view(1, 1):expand(nclasses, 1)
     local t = torch.range(1, nclasses):view(nclasses, 1) -- Calculate across all classes
     local score = model:forward({w, t})
+
+    score:select(1, START_TAG):csub(100000)
+    score:select(1, STOP_TAG):csub(100000)
+    return score
+  end
+
+  function sp_score_prev(x_w, x_t, i)
+    local w = torch.Tensor({{x_w[i][1]}})
+    local t = torch.Tensor({{x_t[i][1]}})
+    local score = model:forward({w, t}):view(nclasses, 1):expand(nclasses, nclasses)
 
     score:select(1, START_TAG):csub(100000)
     score:select(1, STOP_TAG):csub(100000)
@@ -365,7 +375,7 @@ function memm(lm)
         initial_score = initial_score:view(initial_score:size(2), 1)
         x_w = x_w:view(x_w:size(1), 1)
         x_t = x_t:view(x_t:size(1), 1)
-        classes = chop_last(viterbi(x_w, x_t, sp_score, initial_score))
+        classes = chop_last(viterbi(x_w, x_t, sp_score_prev, initial_score))
       end
 
       local f = f_score(classes, y, 1) -- F1
@@ -469,14 +479,10 @@ function memm(lm)
           if viterbi_preds[i] ~= tonumber(y[i]) then
             local w = x_w[i]:view(1, 1)
 
-            -- Forward over predicted class rather than actual seen
-            -- local t = x_t[i]:view(1, 1)
-            local t = torch.Tensor()
+            -- Forward over predicted class rather than one seen in dataset
+            local t = t = torch.Tensor({{START_TAG}})
             if i > 1 then
               t = torch.Tensor({{viterbi_preds[i-1]}})
-            else
-              t = torch.Tensor({{START_TAG}})
-            end
 
             local grad = torch.zeros(nclasses)
             local new_preds = model:forward({w, t})
@@ -497,6 +503,8 @@ function memm(lm)
 
       -- Set lookup table weights to be a running average from previous
       -- Use a memory coefficient to decide how quickly to forget old weights
+      -- remember = 0: vanilla sgd
+      -- remember = 1: no learning
       if avg == 1 then
         local remember = 0.8
         local forget = 1 - remember
