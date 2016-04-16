@@ -14,6 +14,7 @@ cmd:option('-eta', 1, 'learning rate')
 cmd:option('-nepochs', 15, 'number of training epochs')
 cmd:option('-mb', 32, 'minibatch size')
 cmd:option('-gpu', 0, 'whether to use gpu for training')
+cmd:option('-avg', 0, 'whether to use weight averaging for sp training')
 
 START = 1
 STOP = 2
@@ -93,10 +94,11 @@ function f_score(preds, y, beta)
 end
 
 -- Logging
-local function save_performance(name, t, v)
+local function save_performance(name, t, v, flog)
+  if flog == nil then flog = torch.zeros(nepochs)
   local f = torch.DiskFile('training_output/' .. name .. '.txt', 'w')
   for j = 1, v:size(1) do
-    f:writeString(t[j] .. ','  .. v[j] .. '\n')
+    f:writeString(t[j] .. ','  .. v[j] .. ',' .. flog[j] .. '\n')
   end
   f:close()
 end
@@ -292,6 +294,9 @@ function memm(lm)
     -- Zero lt weights
     sparse_W_w.weight:zero()
     sparse_W_t.weight:zero()
+    if avg == 1 then
+      print('Using cross-epoch weight averaging.')
+    end
   end
 
   local nll = nn.ClassNLLCriterion()
@@ -308,6 +313,7 @@ function memm(lm)
   -- Logging
   local vacc = torch.DoubleTensor(nepochs)
   local tacc = torch.DoubleTensor(nepochs)
+  local flog = torch.DoubleTensor(nepochs)
 
   -- Scoring for viterbi
   function memm_score(x_w, x_t, i)
@@ -337,6 +343,35 @@ function memm(lm)
     
     local correct = yhat:int():eq(y):double():mean() * 100
     return correct
+  end
+
+  -- F1 calculation
+  function f1()
+    local totalf = 0
+    for i = 1, valid_x_w_s:size(1) do
+      local x_w = chop(valid_x_w_s[i]:view(valid_x_w_s[i]:size(1)))
+      local x_t = chop(valid_x_t_s[i]:view(valid_x_t_s[i]:size(1)))
+      x_t = chop_last(x_t) -- Remove final tag
+      local y = chop_last(chop(valid_y_memm_s[i]:view(valid_y_memm_s[i]:size(1))))
+
+      local classes = torch.Tensor()
+      if lm == 'memm' then
+        local initial_score = memm_score(x_w, x_t, 1):select(2,1)
+        initial_score = initial_score:view(initial_score:size(1), 1)
+        classes = chop_last(viterbi(x_w, x_t, memm_score, initial_score))
+      else
+        local w1 = torch.Tensor({{x_w[1]}})
+        local initial_score = model:forward({w1, torch.Tensor({{START_TAG}})})
+        initial_score = initial_score:view(initial_score:size(2), 1)
+        x_w = x_w:view(x_w:size(1), 1)
+        x_t = x_t:view(x_t:size(1), 1)
+        classes = chop_last(viterbi(x_w, x_t, sp_score, initial_score))
+      end
+
+      local f = f_score(classes, y, 1) -- F1
+      totalf = totalf + f
+    end
+    return totalf / valid_x_w_s:size(1)
   end
 
   -- Train
@@ -393,7 +428,20 @@ function memm(lm)
     end
   else
     -- Structured Perceptron Train
+    local prev_w_weight = torch.Tensor()
+    local prev_t_weight = torch.Tensor()
     for e = 1, nepochs do
+
+      -- Weight averaging across epochs
+      if avg == 1 then
+        local w_size = sparse_W_w.weight:size()
+        local t_size = sparse_W_t.weight:size()
+        prev_w_weight = torch.Tensor(w_size[1], w_size[2])
+        prev_t_weight = torch.Tensor(t_size[1], t_size[2])
+
+        prev_w_weight:copy(sparse_W_w.weight)
+        prev_t_weight:copy(sparse_W_t.weight)
+      end
 
       print('\nBeginning epoch ' .. e .. ' training.')
       local loss = 0
@@ -431,25 +479,38 @@ function memm(lm)
             end
 
             local grad = torch.zeros(nclasses)
-            model:forward({w, t})
+            local new_preds = model:forward({w, t})
+            local max, pred = new_preds:max(2)
 
-            grad[y[i]] = -1
-            grad[viterbi_preds[i]] = 1
+            local gold = y[i]
+            local bad = pred[1][1]
+            -- local bad = viterbi_preds[i]
+
+            grad[gold] = -1
+            grad[bad] = 1
             model:backward({w, t}, grad)
           end
         end
 
-        -- model:updateParameters(eta)
-        params:add(-1, gradParams)
+        model:updateParameters(eta)
+      end
+
+      -- Set lookup table weights to be a running average from previous
+      -- Use a memory coefficient to decide how quickly to forget old weights
+      if avg == 1 then
+        local remember = 0.8
+        local forget = 1 - remember
+        sparse_W_w.weight:mul(forget):add(remember, prev_w_weight)
+        sparse_W_t.weight:mul(forget):add(remember, prev_t_weight)
       end
 
       -- If accuracy isn't increasing from previous epoch, halve eta
       -- Only do this towards the end of training (be patient)
       local acc = test(valid_x_w, valid_x_t, valid_y_memm)
-      if e > nepochs - 10 and  acc > prev_acc then
-        eta = eta / 2
-        print('Reducing learning rate to ' .. eta .. '.')
-      end
+      -- if e > nepochs - 10 and  acc > prev_acc then
+      --   eta = eta / 2
+      --   print('Reducing learning rate to ' .. eta .. '.')
+      -- end
       prev_acc = acc
       
       print('Epoch ' .. e .. ' training completed in ' .. timer:time().real ..
@@ -461,43 +522,18 @@ function memm(lm)
 
       vacc[e] = acc
       tacc[e] = train_acc
+
+      -- Test F1 on validation
+      print('\nCalculating validation F1...')
+      local score = f1()
+      print('Validation F1 score: ' .. score .. '.')
+      flog[e] = score
     end
   end
-
-  -- Test F1 on validation
-  print('\nCalculating validation F1...')
-  local totalf = 0
-  for i = 1, valid_x_w_s:size(1) do
-    local x_w = chop(valid_x_w_s[i]:view(valid_x_w_s[i]:size(1)))
-    local x_t = chop(valid_x_t_s[i]:view(valid_x_t_s[i]:size(1)))
-    x_t = chop_last(x_t) -- Remove final tag
-    local y = chop_last(chop(valid_y_memm_s[i]:view(valid_y_memm_s[i]:size(1))))
-
-    local classes = torch.Tensor()
-    if lm == 'memm' then
-      local initial_score = memm_score(x_w, x_t, 1):select(2,1)
-      initial_score = initial_score:view(initial_score:size(1), 1)
-      classes = chop_last(viterbi(x_w, x_t, memm_score, initial_score))
-    else
-      local w1 = torch.Tensor({{x_w[1]}})
-      local initial_score = model:forward({w1, torch.Tensor({{START_TAG}})})
-      initial_score = initial_score:view(initial_score:size(2), 1)
-      x_w = x_w:view(x_w:size(1), 1)
-      x_t = x_t:view(x_t:size(1), 1)
-      classes = chop_last(viterbi(x_w, x_t, sp_score, initial_score))
-    end
-
-    local f = f_score(classes, y, 1) -- F1
-    totalf = totalf + f
-  end
-
-  local validf = totalf / valid_x_w_s:size(1)
-  print('Validation F1 score: ' .. validf .. '.')
 
   -- Save to logfile
-  -- local name = 'model=' .. lm .. ',dwin=' .. dwin .. ',dembed='
-  -- .. embedding_size .. ',mse=' .. mse
-  -- save_performance(name, tacc, vacc)
+  local name = 'model=' .. lm .. ',f1=' .. flog[nepochs]
+  save_performance(name, tacc, vacc, flog)
 end
 
 function main() 
@@ -510,6 +546,7 @@ function main()
   nepochs = opt.nepochs
   batch_size = opt.mb
   gpu = opt.gpu
+  avg = opt.avg
 
   local f = hdf5.open(opt.datafile, 'r')
   nclasses = f:read('nclasses'):all():long()[1]
