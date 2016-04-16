@@ -20,11 +20,19 @@ STOP = 2
 START_TAG = 8
 STOP_TAG = 9
 
+local tags = {}
+tags[2] = 'PER'
+tags[3] = 'LOC'
+tags[4] = 'ORG'
+tags[5] = 'MISC'
+tags[6] = 'MISC'
+tags[7] = 'LOC'
+
 ----------
 -- Misc
 ----------
 
--- Helper function that finds the nth index of a given value in a tensor
+-- Finds the nth index of a given value in a tensor
 function find_nth(t, val, n)
   local count = 0
   for i = 1, t:size(1) do
@@ -36,7 +44,7 @@ function find_nth(t, val, n)
   return -1
 end
 
--- Helper function that finds the first index of a given value in a tensor
+-- Finds the first index of a given value in a tensor
 function find_first(t, val)
   return find_nth(t, val, 1)
 end
@@ -90,6 +98,41 @@ local function save_performance(name, t, v)
   for j = 1, v:size(1) do
     f:writeString(t[j] .. ','  .. v[j] .. '\n')
   end
+  f:close()
+end
+
+-- Kaggle predictions
+local function format_kaggle(seq)
+  local cur_tag = ''
+  local output = ''
+  for i = 1, seq:size(1) do
+    local t = tags[seq[i]]
+    if t == nil then
+      cur_tag = 'O'
+    elseif t ~= cur_tag then
+      if output == '' then -- First tag
+        cur_tag = t
+        output = output .. cur_tag .. '-' .. i
+      else -- Next new tag
+        cur_tag = t
+        output = output .. ' ' .. t .. '-' .. i
+      end
+    else -- Continuing current tag
+      output = output .. '-' .. i
+    end
+  end
+  return output
+end
+
+function save_kaggle(preds)
+  local f = torch.DiskFile('training_output/kaggle_preds_model=' .. lm .. '.txt', 'w')
+  f:writeString('ID,Labels\n') -- Header row
+
+  for i = 1, #preds do
+    f:writeString(tostring(i) .. ',' .. preds[i])
+    f:writeString('\n')
+  end
+
   f:close()
 end
 
@@ -199,6 +242,20 @@ function hmm()
 
   local validf = totalf / valid_x:size(1)
   print('Validation F1 score: ' .. validf .. '.')
+
+  -- Predict optimal sequences on kaggle test using viterbi
+  print('Computing Kaggle sequences...')
+  local preds = {}
+  for i = 1, test_x_w_s:size(1) do
+    local x = chop(test_x_w_s[i]:view(test_x_w_s[i]:size(1)))
+    local x = torch.LongTensor({1}):cat(x)
+    local initial_emission = emission[x[1]]
+    local classes = slap(viterbi(x, nil, hmm_score, initial_emission))
+    preds[i] = format_kaggle(classes)
+  end
+
+  save_kaggle(preds)
+  print('All done!')
 end
 
 ----------
@@ -363,20 +420,27 @@ function memm(lm)
         for i = 1, viterbi_preds:size(1) do
           if viterbi_preds[i] ~= tonumber(y[i]) then
             local w = x_w[i]:view(1, 1)
-            local t = x_t[i]:view(1, 1)
+
+            -- Forward over predicted class rather than actual seen
+            -- local t = x_t[i]:view(1, 1)
+            local t = torch.Tensor()
+            if i > 1 then
+              t = torch.Tensor({{viterbi_preds[i-1]}})
+            else
+              t = torch.Tensor({{START_TAG}})
+            end
+
             local grad = torch.zeros(nclasses)
             model:forward({w, t})
 
-            -- Opposite values because of updateParameters()
-            grad[y[i]] = 1
-            grad[viterbi_preds[i]] = -1
+            grad[y[i]] = -1
+            grad[viterbi_preds[i]] = 1
             model:backward({w, t}, grad)
-            -- print('mismatch')
-            -- print(viterbi_preds[i], y[i])
-            -- print(grad)
           end
         end
-        model:updateParameters(eta)
+
+        -- model:updateParameters(eta)
+        params:add(-1, gradParams)
       end
 
       -- If accuracy isn't increasing from previous epoch, halve eta
@@ -474,6 +538,8 @@ function main()
   valid_x_w_s = f:read('valid_input_w_s'):all()
   valid_x_t_s = f:read('valid_input_t_s'):all()
   valid_y_memm_s = f:read('valid_output_memm_s'):all()
+
+  test_x_w_s = f:read('test_input_w_s'):all()
 
   if lm == 'hmm' then
     hmm()

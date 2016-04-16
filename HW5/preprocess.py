@@ -110,6 +110,25 @@ def sentences_to_windows(xs, ys, dwin):
     o_s = []
   return input_w, input_t, output, input_w_s, input_t_s, output_s
 
+def test_sentences_to_windows(xs, dwin):
+  input_w_s = []
+
+  for i in range(len(xs)):
+    padding = dwin - 1
+    x = [word_to_idx[START]] * padding + xs[i][0:xs[i].index(word_to_idx[STOP]) + 1]
+    w_s = []
+    for j in range(dwin, len(x)):
+      w_window = x[j-dwin+1:j+1]
+      w_s.append(w_window)
+
+    # Standardize length with padding
+    w_s = w_s + [[word_to_idx[STOP]]] * (longest[1] - len(w_s))
+
+    # Format into sentence chunks
+    input_w_s.append(w_s)
+    w_s = []
+  return input_w_s
+
 def build_tag_dict(filename):
   idx = -1
   with codecs.open(filename, 'r', encoding='latin-1') as f:
@@ -183,6 +202,7 @@ def main(arguments):
   valid_input_w, valid_input_t, valid_output_memm, valid_input_w_s, \
     valid_input_t_s, valid_output_memm_s = sentences_to_windows(input_dict[valid], \
     output_dict[valid], dwin)
+  test_input_w_s = test_sentences_to_windows(input_dict[test], dwin)
 
   train_input_w = np.array(train_input_w, dtype=np.int32)
   train_input_t = np.array(train_input_t, dtype=np.int32)
@@ -217,6 +237,8 @@ def main(arguments):
     f['valid_input_w_s'] = valid_input_w_s
     f['valid_input_t_s'] = valid_input_t_s
     f['valid_output_memm_s'] = valid_output_memm_s
+
+    f['test_input_w_s'] = test_input_w_s
 
     f['nfeatures'] = np.array([dwin * 2], dtype=np.int32)
     f['nwords'] = np.array([V], dtype=np.int32)
