@@ -19,6 +19,7 @@ FILE_PATHS = {'CONLL': ('data/train.num.txt',
 args = {}
 tag_to_idx = {}
 word_to_idx = {}
+longest = {1: 0}
 
 START = '<s>'
 STOP = '</s>'
@@ -38,7 +39,6 @@ def build_sentences(file_list):
 
         sentence = [word_to_idx[START]]
         tags = [tag_to_idx[START_TAG]]
-        longest = 0
         for line in f:
           line = line.split()
           if len(line) == 0: # EOS
@@ -48,7 +48,7 @@ def build_sentences(file_list):
 
             input_s[filename].append(sentence)
             output_s[filename].append(tags)
-            if len(sentence) > longest: longest = len(sentence)
+            if len(sentence) > longest[1]: longest[1] = len(sentence)
 
             sentence = [word_to_idx[START]]
             tags = [tag_to_idx[START_TAG]]
@@ -64,30 +64,51 @@ def build_sentences(file_list):
         # Standardize sentence/tag length with padding
         for i in range(len(input_s[filename])):
           input_s[filename][i] = input_s[filename][i] + [word_to_idx[STOP]] \
-            * (longest - len(input_s[filename][i]))
+            * (longest[1] - len(input_s[filename][i]))
           output_s[filename][i] = output_s[filename][i] + [tag_to_idx[STOP_TAG]] \
-            * (longest - len(output_s[filename][i]))
+            * (longest[1] - len(output_s[filename][i]))
   return input_s, output_s
 
 def sentences_to_windows(xs, ys, dwin):
   input_w = []
   input_t = []
   output = []
+  input_w_s = []
+  input_t_s = []
+  output_s = []
   for i in range(len(xs)):
     padding = dwin - 1 # Each sentence already has 1 start token
     x = [word_to_idx[START]] * padding + xs[i][0:xs[i].index(word_to_idx[STOP]) + 1]
     y = [tag_to_idx[START_TAG]] * padding + ys[i][0:ys[i].index(tag_to_idx[STOP_TAG]) + 1]
 
+    w_s = []
+    t_s = []
+    o_s = []
     for j in range(dwin, len(x)):
-      # x = dwin prev tags (excl current), dwin words (including current)
+      # x = dwin prev tags (excl current), dwin words (incl current)
       # y = current tag
       w_window = x[j-dwin+1:j+1]
       prev_tags = y[j-dwin:j]
       input_w.append(w_window)
       input_t.append(prev_tags)
       output.append(y[j])
-  return input_w, input_t, output
+      w_s.append(w_window)
+      t_s.append(prev_tags)
+      o_s.append([y[j]])
 
+    # Standardize length with padding
+    w_s = w_s + [[word_to_idx[STOP]]] * (longest[1] - len(w_s))
+    t_s = t_s + [[tag_to_idx[STOP_TAG]]] * (longest[1] - len(t_s))
+    o_s = o_s + [[tag_to_idx[STOP_TAG]]] * (longest[1] - len(o_s))
+
+    # Format into sentence chunks
+    input_w_s.append(w_s)
+    input_t_s.append(t_s)
+    output_s.append(o_s)
+    w_s = []
+    t_s = []
+    o_s = []
+  return input_w, input_t, output, input_w_s, input_t_s, output_s
 
 def build_tag_dict(filename):
   idx = -1
@@ -156,10 +177,13 @@ def main(arguments):
   test_input = np.array(input_dict[test], dtype=np.int32)
 
   dwin = 1
-  train_input_w, train_input_t, train_output_memm = \
-    sentences_to_windows(input_dict[train], output_dict[train], dwin)
-  valid_input_w, valid_input_t, valid_output_memm = \
-    sentences_to_windows(input_dict[valid], output_dict[valid], dwin)
+  train_input_w, train_input_t, train_output_memm, train_input_w_s, \
+    train_input_t_s, train_output_memm_s, = sentences_to_windows(input_dict[train], \
+    output_dict[train], dwin)
+  valid_input_w, valid_input_t, valid_output_memm, valid_input_w_s, \
+    valid_input_t_s, valid_output_memm_s = sentences_to_windows(input_dict[valid], \
+    output_dict[valid], dwin)
+
   train_input_w = np.array(train_input_w, dtype=np.int32)
   train_input_t = np.array(train_input_t, dtype=np.int32)
   train_output_memm = np.array(train_output_memm, dtype=np.int32)
@@ -167,6 +191,9 @@ def main(arguments):
   valid_input_w = np.array(valid_input_w, dtype=np.int32)
   valid_input_t = np.array(valid_input_t, dtype=np.int32)
   valid_output_memm = np.array(valid_output_memm, dtype=np.int32)
+  valid_input_w_s = np.array(valid_input_w_s, dtype=np.int32)
+  valid_input_t_s = np.array(valid_input_t_s, dtype=np.int32)
+  valid_output_memm_s = np.array(valid_output_memm_s, dtype=np.int32)
 
   filename = args.dataset + '.hdf5'
   with h5py.File(filename, 'w') as f:
@@ -179,9 +206,17 @@ def main(arguments):
     f['train_input_w'] = train_input_w
     f['train_input_t'] = train_input_t
     f['train_output_memm'] = train_output_memm
+    f['train_input_w_s'] = train_input_w_s
+    f['train_input_t_s'] = train_input_t_s
+    f['train_output_memm_s'] = train_output_memm_s
+
+
     f['valid_input_w'] = valid_input_w
     f['valid_input_t'] = valid_input_t
     f['valid_output_memm'] = valid_output_memm
+    f['valid_input_w_s'] = valid_input_w_s
+    f['valid_input_t_s'] = valid_input_t_s
+    f['valid_output_memm_s'] = valid_output_memm_s
 
     f['nfeatures'] = np.array([dwin * 2], dtype=np.int32)
     f['nwords'] = np.array([V], dtype=np.int32)

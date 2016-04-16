@@ -1,7 +1,8 @@
 -- Only requirements allowed
 require('hdf5')
 require('nn')
-require('optim')
+-- require('cunn')
+-- require('cutorch')
 
 cmd = torch.CmdLine()
 
@@ -9,9 +10,10 @@ cmd = torch.CmdLine()
 cmd:option('-datafile', '', 'data file')
 cmd:option('-lm', 'hmm', 'classifier to use')
 cmd:option('-alpha', 0.01, 'Laplace smoothing coefficient')
-cmd:option('-eta', 0.1, 'learning rate')
+cmd:option('-eta', 1, 'learning rate')
 cmd:option('-nepochs', 15, 'number of training epochs')
 cmd:option('-mb', 32, 'minibatch size')
+cmd:option('-gpu', 0, 'whether to use gpu for training')
 
 START = 1
 STOP = 2
@@ -51,6 +53,11 @@ function slap(seq)
   return seq[{{2, seq:size(1) - 1}}]
 end
 
+-- Removes last value from a sequence
+function chop_last(seq)
+  return seq[{{1, seq:size(1) - 1}}]
+end
+
 -- Computes F score
 function f_score(preds, y, beta)
   local cor_pos = 0
@@ -77,15 +84,25 @@ function f_score(preds, y, beta)
   return (1 + b2) * ((p * r) / (b2 * p + r))
 end
 
+-- Logging
+local function save_performance(name, t, v)
+  local f = torch.DiskFile('training_output/' .. name .. '.txt', 'w')
+  for j = 1, v:size(1) do
+    f:writeString(t[j] .. ','  .. v[j] .. '\n')
+  end
+  f:close()
+end
+
 ----------
 -- Search
 ----------
 
 -- Viterbi algorithm
 -- observations: a sequence of observations, represented as integers
+-- observations_t: a sequence of previous classes (only for memm, sp)
 -- logscore: the edge scoring function over classes and observations in a
 -- history-based model
-function viterbi(observations, logscore, emission)
+function viterbi(observations, observations_t, logscore, initial_emission)
   local initial = torch.zeros(nclasses, 1)
   initial[START_TAG] = 1 -- Initial transition dist (always begins with start)
   initial:log()
@@ -96,12 +113,16 @@ function viterbi(observations, logscore, emission)
 
   -- First timestep
   -- Initial most likely paths are the initial state distribution
-  local maxes, backpointers = (initial + emission[observations[1]]):max(2)
+  local maxes, backpointers = (initial + initial_emission):max(2)
+  if observations_t ~= nil then
+    maxes, backpointers = initial_emission:max(2)
+  end
+
   max_table[1] = maxes
 
   -- Remaining timesteps
   for i = 2, n do
-    local y = logscore(observations, i)
+    local y = logscore(observations, observations_t, i)
     local scores = y + maxes:view(1, nclasses):expand(nclasses, nclasses)
     maxes, backpointers = scores:max(2)
     max_table[i] = maxes
@@ -158,7 +179,7 @@ function hmm()
 
   -- Log-scores of transition and emission
   -- i: timestep for the computed score
-  function hmm_score(observations, i)
+  function hmm_score(observations, observations_t, i)
     local observation_emission = emission[observations[i]]:view(nclasses, 1):
       expand(nclasses, nclasses)
     return observation_emission + transition
@@ -170,7 +191,8 @@ function hmm()
   for i = 1, valid_x:size(1) do
     local x = chop(valid_x[i])
     local y = slap(chop(valid_y[i])) -- SLAP CHOP!!!
-    local classes = slap(viterbi(x, hmm_score, emission))
+    local initial_emission = emission[x[1]]
+    local classes = slap(viterbi(x, nil, hmm_score, initial_emission))
     local f = f_score(classes, y, 1) -- F1
     totalf = totalf + f
   end
@@ -180,11 +202,13 @@ function hmm()
 end
 
 ----------
--- MEMM
+-- MEMM/SP
 ----------
 
-function memm()
-  print('\nBuilding MEMM with hyperparameters:')
+function memm(lm)
+  local name = 'Structured Perceptron'
+  if lm == 'memm' then name = 'MEMM' end
+  print('\nBuilding ' .. name .. ' with hyperparameters:')
   print('Learning rate (eta): ' .. eta)
   print('Number of epochs (nepochs): ' .. nepochs)
   print('Mini-batch size (mb): ' .. batch_size)
@@ -194,22 +218,24 @@ function memm()
   -- Word input
   local sparse_W_w = nn.LookupTable(nwords, nclasses)
   local W_w = nn.Sequential():add(sparse_W_w):add(nn.Sum(2))
-  -- print(W_w:forward(train_x_w[1]))
 
   -- Tag input
   local sparse_W_t = nn.LookupTable(nclasses, nclasses)
-  local W_t = nn.Sequential():add(sparse_W_t):add(nn.Sum(2))
-  -- print(W_t:forward(train_x_t[1]))
+  local W_t = nn.Sequential():add(sparse_W_t):add(nn.Reshape(nclasses))
   
   local par = nn.ParallelTable()
   par:add(W_w)
   par:add(W_t)
 
   model:add(par)
-  -- print(model:forward({train_x_w[1], train_x_t[1]}))
-
   model:add(nn.CAddTable())
-  model:add(nn.LogSoftMax())
+  if lm == 'memm' then
+    model:add(nn.LogSoftMax())
+  else
+    -- Zero lt weights
+    sparse_W_w.weight:zero()
+    sparse_W_t.weight:zero()
+  end
 
   local nll = nn.ClassNLLCriterion()
   local params, gradParams = model:getParameters()
@@ -223,12 +249,33 @@ function memm()
   end
 
   -- Logging
-  -- local vperp = torch.DoubleTensor(nepochs)
-  -- local tperp = torch.DoubleTensor(nepochs)
+  local vacc = torch.DoubleTensor(nepochs)
+  local tacc = torch.DoubleTensor(nepochs)
+
+  -- Scoring for viterbi
+  function memm_score(x_w, x_t, i)
+    local w = torch.Tensor({x_w[i]}):view(1, 1)
+    local t = torch.Tensor({x_t[i]}):view(1, 1)
+    local score = model:forward({w, t}):view(nclasses, 1):expand(nclasses, nclasses)
+
+    -- Prevent predicting start or stop tokens
+    score:select(1, START_TAG):csub(100000)
+    score:select(1, STOP_TAG):csub(100000)
+    return score
+  end
+
+  function sp_score(x_w, x_t, i)
+    local w = x_w[i]:view(1, 1):expand(nclasses, 1)
+    local t = torch.range(1, nclasses):view(nclasses, 1) -- Calculate across all classes
+    local score = model:forward({w, t})
+
+    score:select(1, START_TAG):csub(100000)
+    score:select(1, STOP_TAG):csub(100000)
+    return score
+  end
 
   function test(x_w, x_t, y)
     local preds = model:forward({x_w, x_t})
-    local loss = nll:forward(preds, y)
     local max, yhat = preds:max(2)
     
     local correct = yhat:int():eq(y):double():mean() * 100
@@ -239,66 +286,154 @@ function memm()
   local n_train_batches = train_x:size(1) / batch_size
   local prev_acc = math.huge
 
-  for e = 1, nepochs do
-    print('\nBeginning epoch ' .. e .. ' training: ' .. n_train_batches ..
-      ' minibatches of size ' .. batch_size .. '.')
-    local loss = 0
-    local timer = torch.Timer()
+  if lm == 'memm' then
+    -- MEMM Train
+    for e = 1, nepochs do
 
-    for j = 1, n_train_batches do
-      model:zeroGradParameters()
-      local x_w = train_x_w:narrow(1, (j - 1) * batch_size + 1, batch_size)
-      local x_t = train_x_t:narrow(1, (j - 1) * batch_size + 1, batch_size)
-      local y = train_y_memm:narrow(1, (j - 1) * batch_size + 1, batch_size)
+      print('\nBeginning epoch ' .. e .. ' training: ' .. n_train_batches ..
+        ' minibatches of size ' .. batch_size .. '.')
+      local loss = 0
+      local timer = torch.Timer()
 
-      if gpu == 1 then
-        x = x:cuda()
-        y = y:cuda()
+      for j = 1, n_train_batches do
+        model:zeroGradParameters()
+        local x_w = train_x_w:narrow(1, (j - 1) * batch_size + 1, batch_size)
+        local x_t = train_x_t:narrow(1, (j - 1) * batch_size + 1, batch_size)
+        local y = train_y_memm:narrow(1, (j - 1) * batch_size + 1, batch_size)
+
+        if gpu == 1 then
+          x_w = x_w:cuda()
+          x_t = x_t:cuda()
+          y = y:cuda()
+        end
+
+        local preds = model:forward({x_w, x_t})
+        loss = loss + nll:forward(preds, y)
+
+        local dLdpreds = nll:backward(preds, y)
+        model:backward({x_w, x_t}, dLdpreds)
+        model:updateParameters(eta)
       end
 
-      local preds = model:forward({x_w, x_t})
-      loss = loss + nll:forward(preds, y)
+      -- If accuracy isn't increasing from previous epoch, halve eta
+      -- Only do this towards the end of training (be patient)
+      local acc = test(valid_x_w, valid_x_t, valid_y_memm)
+      if e > nepochs - 10 and  acc > prev_acc then
+        eta = eta / 2
+        print('Reducing learning rate to ' .. eta .. '.')
+      end
+      prev_acc = acc
+      
+      print('Epoch ' .. e .. ' training completed in ' .. timer:time().real ..
+        ' seconds.')
+      print('Validation accuracy after epoch ' .. e .. ': ' .. acc .. '.')
 
-      local dLdpreds = nll:backward(preds, y)
-      model:backward(preds, dLdpreds)
-      model:updateParameters(eta)
+      local train_acc = test(train_x_w, train_x_t, train_y_memm)
+      print('Train accuracy after epoch ' .. e .. ': ' .. train_acc .. '.')
+
+      vacc[e] = acc
+      tacc[e] = train_acc
     end
+  else
+    -- Structured Perceptron Train
+    for e = 1, nepochs do
 
-    -- If accuracy isn't increasing from previous epoch, halve eta
-    local acc = test(valid_x_w, valid_x_t, valid_y_memm)
-    if acc > prev_acc or math.abs(acc - prev_acc) < 0.002 then
-      eta = eta / 2
-      print('Reducing learning rate to ' .. eta .. '.')
+      print('\nBeginning epoch ' .. e .. ' training.')
+      local loss = 0
+      local timer = torch.Timer()
+      for j = 1, train_x_w_s:size(1) do
+        model:zeroGradParameters()
+        local x_w = chop(train_x_w_s[j]:view(train_x_w_s[j]:size(1)))
+        local x_t = chop(train_x_t_s[j]:view(train_x_t_s[j]:size(1)))
+        x_t = chop_last(x_t) -- Remove final tag
+        local y = chop(train_y_memm_s[j]:view(train_y_memm_s[j]:size(1)))
+
+        -- Enforce column structure
+        x_w = x_w:view(x_w:size(1), 1)
+        x_t = x_t:view(x_t:size(1), 1)
+        -- y = y:view(y:size(1), 1)
+
+        -- Find initial optimal sequence according to viterbi
+        local initial_score = model:forward({x_w[1]:view(1, 1), torch.Tensor({{START_TAG}})})
+        initial_score = initial_score:view(initial_score:size(2), 1)
+        local viterbi_preds = viterbi(x_w, x_t, sp_score, initial_score)
+
+        -- Compare viterbi preds to gold sequence
+        -- Create gradient by hand for backprop
+        for i = 1, viterbi_preds:size(1) do
+          if viterbi_preds[i] ~= tonumber(y[i]) then
+            local w = x_w[i]:view(1, 1)
+            local t = x_t[i]:view(1, 1)
+            local grad = torch.zeros(nclasses)
+            model:forward({w, t})
+
+            -- Opposite values because of updateParameters()
+            grad[y[i]] = 1
+            grad[viterbi_preds[i]] = -1
+            model:backward({w, t}, grad)
+            -- print('mismatch')
+            -- print(viterbi_preds[i], y[i])
+            -- print(grad)
+          end
+        end
+        model:updateParameters(eta)
+      end
+
+      -- If accuracy isn't increasing from previous epoch, halve eta
+      -- Only do this towards the end of training (be patient)
+      local acc = test(valid_x_w, valid_x_t, valid_y_memm)
+      if e > nepochs - 10 and  acc > prev_acc then
+        eta = eta / 2
+        print('Reducing learning rate to ' .. eta .. '.')
+      end
+      prev_acc = acc
+      
+      print('Epoch ' .. e .. ' training completed in ' .. timer:time().real ..
+        ' seconds.')
+      print('Validation accuracy after epoch ' .. e .. ': ' .. acc .. '.')
+
+      local train_acc = test(train_x_w, train_x_t, train_y_memm)
+      print('Train accuracy after epoch ' .. e .. ': ' .. train_acc .. '.')
+
+      vacc[e] = acc
+      tacc[e] = train_acc
     end
-    prev_perp = perp
-    
-    print('Epoch ' .. e .. ' training completed in ' .. timer:time().real ..
-      ' seconds.')
-    print('Validation accuracy after epoch ' .. e .. ': ' .. acc .. '.')
-
-    -- local train_perp = test(train_x, train_y)
-    -- print('Train perplexity after epoch ' .. e .. ': ' .. train_perp .. '.')
-
-    -- vperp[e] = perp
-    -- tperp[e] = train_perp
   end
 
-  -- print('\nCalculating greedy mse on validation segmentation...')
-  -- local mse = predict(valid_kaggle_x, valid_kaggle_y, dwin+1, greedy_search, false, 0.4)
-  -- print('Validation segmentation mse: ' .. mse)
+  -- Test F1 on validation
+  print('\nCalculating validation F1...')
+  local totalf = 0
+  for i = 1, valid_x_w_s:size(1) do
+    local x_w = chop(valid_x_w_s[i]:view(valid_x_w_s[i]:size(1)))
+    local x_t = chop(valid_x_t_s[i]:view(valid_x_t_s[i]:size(1)))
+    x_t = chop_last(x_t) -- Remove final tag
+    local y = chop_last(chop(valid_y_memm_s[i]:view(valid_y_memm_s[i]:size(1))))
+
+    local classes = torch.Tensor()
+    if lm == 'memm' then
+      local initial_score = memm_score(x_w, x_t, 1):select(2,1)
+      initial_score = initial_score:view(initial_score:size(1), 1)
+      classes = chop_last(viterbi(x_w, x_t, memm_score, initial_score))
+    else
+      local w1 = torch.Tensor({{x_w[1]}})
+      local initial_score = model:forward({w1, torch.Tensor({{START_TAG}})})
+      initial_score = initial_score:view(initial_score:size(2), 1)
+      x_w = x_w:view(x_w:size(1), 1)
+      x_t = x_t:view(x_t:size(1), 1)
+      classes = chop_last(viterbi(x_w, x_t, sp_score, initial_score))
+    end
+
+    local f = f_score(classes, y, 1) -- F1
+    totalf = totalf + f
+  end
+
+  local validf = totalf / valid_x_w_s:size(1)
+  print('Validation F1 score: ' .. validf .. '.')
 
   -- Save to logfile
   -- local name = 'model=' .. lm .. ',dwin=' .. dwin .. ',dembed='
   -- .. embedding_size .. ',mse=' .. mse
-  -- save_performance(name, tperp, vperp)
-end
-
-----------
--- Perceptron
-----------
-
-function perceptron()
-  print('TODO perceptron')
+  -- save_performance(name, tacc, vacc)
 end
 
 function main() 
@@ -310,6 +445,7 @@ function main()
   eta = opt.eta
   nepochs = opt.nepochs
   batch_size = opt.mb
+  gpu = opt.gpu
 
   local f = hdf5.open(opt.datafile, 'r')
   nclasses = f:read('nclasses'):all():long()[1]
@@ -331,12 +467,20 @@ function main()
   valid_x_t = f:read('valid_input_t'):all()
   valid_y_memm = f:read('valid_output_memm'):all()
 
+  -- Preserving sentence chunks
+  train_x_w_s = f:read('train_input_w_s'):all()
+  train_x_t_s = f:read('train_input_t_s'):all()
+  train_y_memm_s = f:read('train_output_memm_s'):all()
+  valid_x_w_s = f:read('valid_input_w_s'):all()
+  valid_x_t_s = f:read('valid_input_t_s'):all()
+  valid_y_memm_s = f:read('valid_output_memm_s'):all()
+
   if lm == 'hmm' then
     hmm()
-  elseif lm == 'memm' then
-    memm()
+  elseif lm == 'memm' or lm == 'sp' then
+    memm(lm)
   else
-    perceptron()
+    print('No recognized classifier specified, bailing out.')
   end
 end
 
