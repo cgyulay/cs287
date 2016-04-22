@@ -214,7 +214,7 @@ def main(arguments):
   valid_input_w_s = np.array(valid_input_w_s, dtype=np.int32)
   valid_input_t_s = np.array(valid_input_t_s, dtype=np.int32)
   valid_output_memm_s = np.array(valid_output_memm_s, dtype=np.int32)
-
+  
   filename = args.dataset + '.hdf5'
   with h5py.File(filename, 'w') as f:
     f['train_input'] = train_input

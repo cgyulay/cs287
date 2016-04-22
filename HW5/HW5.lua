@@ -1,4 +1,5 @@
 -- Only requirements allowed
+package.path = package.path .. ";?.lua"
 require('hdf5')
 require('nn')
 -- require('cunn')
@@ -435,6 +436,14 @@ function memm(lm)
 
       vacc[e] = acc
       tacc[e] = train_acc
+
+      -- Test F1 on validation
+      if e % 10 == 0 then
+        print('\nCalculating validation F1...')
+        local score = f1()
+        print('Validation F1 score: ' .. score .. '.')
+        flog[e] = score
+      end
     end
   else
     -- Structured Perceptron Train
@@ -480,9 +489,10 @@ function memm(lm)
             local w = x_w[i]:view(1, 1)
 
             -- Forward over predicted class rather than one seen in dataset
-            local t = t = torch.Tensor({{START_TAG}})
+            local t = torch.Tensor({{START_TAG}})
             if i > 1 then
               t = torch.Tensor({{viterbi_preds[i-1]}})
+            end
 
             local grad = torch.zeros(nclasses)
             local new_preds = model:forward({w, t})
@@ -506,7 +516,7 @@ function memm(lm)
       -- remember = 0: vanilla sgd
       -- remember = 1: no learning
       if avg == 1 then
-        local remember = 0.8
+        remember = 0.85
         local forget = 1 - remember
         sparse_W_w.weight:mul(forget):add(remember, prev_w_weight)
         sparse_W_t.weight:mul(forget):add(remember, prev_t_weight)
@@ -515,10 +525,6 @@ function memm(lm)
       -- If accuracy isn't increasing from previous epoch, halve eta
       -- Only do this towards the end of training (be patient)
       local acc = test(valid_x_w, valid_x_t, valid_y_memm)
-      -- if e > nepochs - 10 and  acc > prev_acc then
-      --   eta = eta / 2
-      --   print('Reducing learning rate to ' .. eta .. '.')
-      -- end
       prev_acc = acc
       
       print('Epoch ' .. e .. ' training completed in ' .. timer:time().real ..
@@ -540,7 +546,9 @@ function memm(lm)
   end
 
   -- Save to logfile
-  local name = 'model=' .. lm .. ',f1=' .. flog[nepochs]
+  if remember == nil then remember = 0 end
+  local name = 'model=' .. lm .. ',f1=' .. flog[nepochs] .. ',mem=' .. remember
+    .. ',eta=' .. eta
   save_performance(name, tacc, vacc, flog)
 end
 
