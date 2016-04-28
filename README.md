@@ -2,9 +2,14 @@
 Psets and work related to CS 287.
 
 ----
-####Primary contributors
+####Overview
 
-[Colton Gyulay](https://github.com/cgyulay)
+This repo features a number of different language tasks and approaches. Most models are written with the help of the library [Torch](https://github.com/torch/torch7).
+* HW1: Sentiment Analysis (naive Bayes, logistic regression, SVM)
+* HW2: POS Tagging (naive Bayes, logistic regression, MLP)
+* HW3: Language Modeling (n-gram, neural probabilistic LM)
+* HW4: Word Segmentation (n-gram, neural probabilistic LM, RNN/LSTM)
+* HW5: Named Entity Recognition (HMM, MEMM, structured perceptron + Viterbi)
 
 ----
 ####HW 1 Usage
@@ -33,3 +38,8 @@ The following hyperparameters can be specified from the command line:
 * n_epochs: number of training epochs
 * m: mini-batch size
 * kfold: number of k-folds for cross-validation
+
+----
+####Primary contributors
+
+[Colton Gyulay](https://github.com/cgyulay)
